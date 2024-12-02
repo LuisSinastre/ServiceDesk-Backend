@@ -1,20 +1,37 @@
-from flask import Flask, jsonify, request
 import mysql.connector
 from mysql.connector import Error
+from flask import Flask, jsonify, request
+import jwt
+import datetime
+from flask_cors import CORS
+from dotenv import load_dotenv
+import os
+
+# Carregar as variáveis de ambiente do arquivo .env
+load_dotenv('Info.env')  # Certifique-se de usar o nome correto do arquivo .env
 
 app = Flask(__name__)
 
+# Configurando o CORS
+CORS(app, origins=["http://localhost:3000"], allow_headers=["Content-Type", "Authorization"])
+
+# Carregar a chave secreta do arquivo .env
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+# Verificar se a chave secreta foi carregada corretamente
+if not SECRET_KEY:
+    raise ValueError("SECRET_KEY não encontrada. Verifique o arquivo .env.")
 
 # Função para criar uma conexão com o banco de dados MySQL
 def create_connection():
     try:
         # Tenta estabelecer uma conexão com o banco de dados MySQL
         connection = mysql.connector.connect(
-            host="localhost",          # Nome do host onde o banco de dados está hospedado (localhost para o próprio servidor)
-            user="root",               # Nome de usuário do banco de dados (neste caso, o usuário padrão 'root')
-            password="Sinas@4731",     # Senha para o usuário especificado
-            database="bdservicedesk",  # Nome do banco de dados a ser acessado
-            charset="utf8mb4"          # Configuração do charset para garantir suporte a caracteres especiais e emojis
+            host=os.getenv("DB_HOST"),          # Usando o host remoto do MySQL
+            user=os.getenv("DB_USER"),          # Usando o nome de usuário do banco de dados
+            password=os.getenv("DB_PASSWORD"),  # Usando a senha do banco de dados
+            database=os.getenv("DB_NAME"),      # Nome do banco de dados
+            charset="utf8mb4"                    # Configuração do charset para garantir suporte a caracteres especiais e emojis
         )
 
         # Verifica se a conexão foi bem-sucedida
@@ -26,6 +43,50 @@ def create_connection():
         print(f"Conexão deu pau: {e}")  # Mensagem de erro com detalhes
         return None                     # Retorna None para indicar falha na conexão
 
+# Endpoint verificação do login e senha
+@app.route('/login', methods=['POST'])
+def login():
+    # Input de login e senha do usuário
+    data = request.get_json()
+    rg = data.get('username')
+    senha = data.get('password')
+
+    # Verifica se está preenchido
+    if not rg or not senha:
+        return jsonify({"error": "RG e senha obrigatórios"}), 400
+    
+    # Conexão com o banco de dados
+    connection = create_connection()
+    if not connection:
+        return jsonify({"error": "Não foi possível se conectar ao banco de dados"}), 500
+    
+    try:
+        cursor = connection.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM users WHERE rg = %s", (rg,))
+        user = cursor.fetchone()
+
+        # Comparação da senha armazenada
+        if user and user['senha'] == senha:
+            payload = {
+                'sub': user['rg'],
+                'name': user['nome_completo'],
+                'iat': datetime.datetime.utcnow(),
+                'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+            }
+
+            token = jwt.encode(payload, SECRET_KEY, algorithm='HS256')
+
+            # Retorna o token no corpo da resposta
+            return jsonify({'token': token}), 200
+        else:
+            return jsonify({"error": "Usuário ou senha inválidos"}), 401
+        
+    except Error as e:
+        return jsonify({"error": f"Erro ao consultar o banco de dados: {e}"}), 500
+    
+    finally:
+        if connection:
+            connection.close()
 
 # Endpoint para listar usuários
 @app.route('/users', methods=['GET'])
@@ -45,7 +106,7 @@ def get_users():
         cursor.execute("SET NAMES 'utf8mb4'")  # Configura a codificação de caracteres
 
         # Executa a consulta para buscar todos os usuários
-        cursor.execute("SELECT * FROM `bdservicedesk`.`users`")
+        cursor.execute("SELECT * FROM users")
         users = cursor.fetchall()  # Obtém todos os resultados da consulta
 
         # Prepara a resposta como JSON
