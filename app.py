@@ -71,7 +71,7 @@ def authenticate_user():
 
     # Verificação dos dados fornecidos
     if not data.get('username') or not data.get('password'):
-        return jsonify({"error": "RG e senha são obrigatórios"}), 400
+        return jsonify({"error": "Usuário e senha são obrigatórios"}), 400
 
     # Criar conexão com o banco
     connection = create_connection()
@@ -82,7 +82,7 @@ def authenticate_user():
         cursor = connection.cursor(dictionary=True)
 
         # Consultar o usuário pelo RG
-        cursor.execute("SELECT * FROM users WHERE rg = %s", (data['username'],))
+        cursor.execute("SELECT * FROM users WHERE usuario = %s", (data['username'],))
         user = cursor.fetchone()
 
         if not user:
@@ -94,8 +94,8 @@ def authenticate_user():
 
         # Gerar token JWT
         token = jwt.encode({
-            "sub": user['rg'],
-            "nome_completo": user['nome_completo'],
+            "sub": user['usuario'],
+            "nome": user['nome'],
             "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
         }, app.config['SECRET_KEY'], algorithm="HS256")
 
@@ -110,13 +110,16 @@ def authenticate_user():
         if connection:
             connection.close()
 
+
+
+
 # Endpoint para adicionar um novo usuário
 @app.route('/users', methods=['POST'])
 def add_user():
     data = request.get_json()
 
     # Verificação dos dados
-    if not data.get('rg') or not data.get('senha') or not data.get('nome_completo') or not data.get('perfil_acesso') or not data.get('superior_imediato') or not data.get('celula'):
+    if not data.get('usuario') or not data.get('senha') or not data.get('nome') or not data.get('cargo') or not data.get('superior'):
         return jsonify({"error": "Todos os campos são obrigatórios"}), 400
 
     # Criar conexão com o banco
@@ -128,19 +131,19 @@ def add_user():
         cursor = connection.cursor()
 
         # Verificar se o rg já existe
-        cursor.execute("SELECT rg FROM users WHERE rg = %s", (data['rg'],))
+        cursor.execute("SELECT usuario FROM users WHERE usuario = %s", (data['usuario'],))
         if cursor.fetchone():
-            return jsonify({"error": "RG já cadastrado"}), 400
+            return jsonify({"error": "Usuário já cadastrado"}), 400
 
         # Gerar o hash da senha
         hashed_password = generate_password_hash(data['senha'])
 
         # Insere os dados do usuário
         query = """
-        INSERT INTO users (rg, senha, nome_completo, perfil_acesso, superior_imediato, celula)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO users (usuario, senha, nome, cargo, superior)
+        VALUES (%s, %s, %s, %s, %s)
         """
-        values = (data['rg'], hashed_password, data['nome_completo'], data['perfil_acesso'], data['superior_imediato'], data['celula'])
+        values = (data['usuario'], hashed_password, data['nome'], data['cargo'], data['superior'])
 
         cursor.execute(query, values)
         connection.commit()
@@ -153,9 +156,11 @@ def add_user():
         if connection:
             connection.close()
 
-# Endpoint para excluir um usuário pelo RG
-@app.route('/users/<int:rg>', methods=['DELETE'])
-def delete_user(rg):
+
+
+# Endpoint para excluir um usuário pelo usuario
+@app.route('/users/<int:usuario>', methods=['DELETE'])
+def delete_user(usuario):
     connection = create_connection()
     if not connection:
         return jsonify({"error": "Não foi possível conectar com o banco"}), 500
@@ -164,17 +169,17 @@ def delete_user(rg):
         cursor = connection.cursor()
 
         # Verificar se o usuário existe
-        cursor.execute("SELECT rg FROM users WHERE rg = %s", (rg,))
+        cursor.execute("SELECT usuario FROM users WHERE usuario = %s", (usuario,))
         user = cursor.fetchone()
 
         if not user:
             return jsonify({"error": "Usuário não encontrado"}), 404
 
         # Excluir o usuário
-        cursor.execute("DELETE FROM users WHERE rg = %s", (rg,))
+        cursor.execute("DELETE FROM users WHERE usuario = %s", (usuario,))
         connection.commit()
 
-        return jsonify({"message": f"Usuário com RG {rg} excluído com sucesso"}), 200
+        return jsonify({"message": f"Usuário {usuario} excluído com sucesso"}), 200
 
     except Error as e:
         return jsonify({"error": f"Erro ao excluir o usuário: {e}"}), 500
