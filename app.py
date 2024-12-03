@@ -42,7 +42,6 @@ def get_users():
     connection = create_connection()
     if not connection:
         return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
-
     try:
         cursor = connection.cursor(dictionary=True)
 
@@ -57,12 +56,39 @@ def get_users():
         response = jsonify(users)
         response.headers.add('Content-Type', 'application/json; charset=utf-8')  # Forçando UTF-8
         return response
-
     except Error as e:
         return jsonify({"error": f"Erro ao consultar os usuários e detalhes: {e}"}), 500
     finally:
         if connection:
             connection.close()
+
+# Endpoint para o BD de páginas disponíveis
+@app.route('/pagesroles', methods=['GET'])
+def get_pages():
+    connection = create_connection()
+    if not connection:
+        return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        # Garantir que os dados sejam recuperados com o charset correto
+        cursor.execute("SET NAMES 'utf8mb4'")  # Definir a codificação UTF-8 para a consulta
+
+        # Consultando os dados
+        cursor.execute("SELECT * FROM `bdservicedesk`.`pages_roles`")
+        pages_roles = cursor.fetchall()
+
+        # Garantir que os dados sejam retornados com caracteres especiais corretamente
+        response = jsonify(pages_roles)
+        response.headers.add('Content-Type', 'application/json; charset=utf-8')  # Forçando UTF-8
+        return response
+    except Error as e:
+        return jsonify({"error": f"Erro ao consultar os usuários e detalhes: {e}"}), 500
+    finally:
+        if connection:
+            connection.close()
+
+
 
 # Endpoint para autenticar o login
 @app.route('/login', methods=['POST'])
@@ -81,7 +107,7 @@ def authenticate_user():
     try:
         cursor = connection.cursor(dictionary=True)
 
-        # Consultar o usuário pelo RG
+        # Consultar o usuário pelo usuario
         cursor.execute("SELECT * FROM users WHERE usuario = %s", (data['username'],))
         user = cursor.fetchone()
 
@@ -92,16 +118,27 @@ def authenticate_user():
         if not check_password_hash(user['senha'], data['password']):
             return jsonify({"error": "Senha incorreta"}), 401
 
+        # Recuperar permissões com base no cargo
+        cursor.execute("""
+            SELECT id_pagina, pagina_permitida
+            FROM pages_roles
+            WHERE cargo = %s
+        """, (user['cargo'],))
+        permissions = cursor.fetchall()
+
         # Gerar token JWT
         token = jwt.encode({
             "sub": user['usuario'],
             "nome": user['nome'],
+            "cargo": user['cargo'],
+            "ids": [permission['id_pagina'] for permission in permissions],  # IDs das páginas
             "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
         }, app.config['SECRET_KEY'], algorithm="HS256")
 
         return jsonify({
             "message": "Autenticação bem-sucedida",
-            "token": token
+            "token": token,
+            "permissions": permissions  # Retornar permissões para o front-end (opcional)
         }), 200
 
     except Error as e:
