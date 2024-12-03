@@ -1,13 +1,23 @@
 from flask import Flask, jsonify, request
 import mysql.connector
 from mysql.connector import Error
+import jwt
+import datetime
+import os
+from dotenv import load_dotenv
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_cors import CORS
 
+# Carregar variáveis de ambiente do arquivo .env
+load_dotenv('config.env')
 
 app = Flask(__name__)
 
+# Configuração de CORS
+CORS(app)
 
-
-
+# Definir chave secreta a partir do .env ou diretamente no código
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 
 # Conexão com o banco de dados MySQL
 def create_connection():
@@ -25,11 +35,6 @@ def create_connection():
     except Error as e:
         print(f"Conexão deu pau: {e}")
         return None
-
-
-
-
-
 
 # Endpoint para listar usuários
 @app.route('/users', methods=['GET'])
@@ -59,10 +64,51 @@ def get_users():
         if connection:
             connection.close()
 
+# Endpoint para autenticar o login
+@app.route('/login', methods=['POST'])
+def authenticate_user():
+    data = request.get_json()
 
+    # Verificação dos dados fornecidos
+    if not data.get('username') or not data.get('password'):
+        return jsonify({"error": "RG e senha são obrigatórios"}), 400
 
+    # Criar conexão com o banco
+    connection = create_connection()
+    if not connection:
+        return jsonify({"error": "Não foi possível conectar com o banco"}), 500
 
+    try:
+        cursor = connection.cursor(dictionary=True)
 
+        # Consultar o usuário pelo RG
+        cursor.execute("SELECT * FROM users WHERE rg = %s", (data['username'],))
+        user = cursor.fetchone()
+
+        if not user:
+            return jsonify({"error": "Usuário não encontrado"}), 404
+
+        # Verificar se a senha fornecida está correta
+        if not check_password_hash(user['senha'], data['password']):
+            return jsonify({"error": "Senha incorreta"}), 401
+
+        # Gerar token JWT
+        token = jwt.encode({
+            "sub": user['rg'],
+            "nome_completo": user['nome_completo'],
+            "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+        }, app.config['SECRET_KEY'], algorithm="HS256")
+
+        return jsonify({
+            "message": "Autenticação bem-sucedida",
+            "token": token
+        }), 200
+
+    except Error as e:
+        return jsonify({"error": f"Erro ao autenticar o usuário: {e}"}), 500
+    finally:
+        if connection:
+            connection.close()
 
 # Endpoint para adicionar um novo usuário
 @app.route('/users', methods=['POST'])
@@ -86,12 +132,15 @@ def add_user():
         if cursor.fetchone():
             return jsonify({"error": "RG já cadastrado"}), 400
 
+        # Gerar o hash da senha
+        hashed_password = generate_password_hash(data['senha'])
+
         # Insere os dados do usuário
         query = """
         INSERT INTO users (rg, senha, nome_completo, perfil_acesso, superior_imediato, celula)
         VALUES (%s, %s, %s, %s, %s, %s)
         """
-        values = (data['rg'], data['senha'], data['nome_completo'], data['perfil_acesso'], data['superior_imediato'], data['celula'])
+        values = (data['rg'], hashed_password, data['nome_completo'], data['perfil_acesso'], data['superior_imediato'], data['celula'])
 
         cursor.execute(query, values)
         connection.commit()
@@ -104,10 +153,34 @@ def add_user():
         if connection:
             connection.close()
 
+# Endpoint para excluir um usuário pelo RG
+@app.route('/users/<int:rg>', methods=['DELETE'])
+def delete_user(rg):
+    connection = create_connection()
+    if not connection:
+        return jsonify({"error": "Não foi possível conectar com o banco"}), 500
 
+    try:
+        cursor = connection.cursor()
 
+        # Verificar se o usuário existe
+        cursor.execute("SELECT rg FROM users WHERE rg = %s", (rg,))
+        user = cursor.fetchone()
 
+        if not user:
+            return jsonify({"error": "Usuário não encontrado"}), 404
 
+        # Excluir o usuário
+        cursor.execute("DELETE FROM users WHERE rg = %s", (rg,))
+        connection.commit()
+
+        return jsonify({"message": f"Usuário com RG {rg} excluído com sucesso"}), 200
+
+    except Error as e:
+        return jsonify({"error": f"Erro ao excluir o usuário: {e}"}), 500
+    finally:
+        if connection:
+            connection.close()
 
 if __name__ == "__main__":
     app.run(debug=True)
