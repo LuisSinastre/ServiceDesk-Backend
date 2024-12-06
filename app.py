@@ -107,7 +107,7 @@ def authenticate_user():
     try:
         cursor = connection.cursor(dictionary=True)
 
-        # Consultar o usuário pelo usuario
+        # Consultar o usuário pelo nome de usuário
         cursor.execute("SELECT * FROM users WHERE usuario = %s", (data['username'],))
         user = cursor.fetchone()
 
@@ -120,25 +120,28 @@ def authenticate_user():
 
         # Recuperar permissões com base no cargo
         cursor.execute("""
-            SELECT id_pagina, pagina_permitida
+            SELECT id_pagina
             FROM pages_roles
             WHERE cargo = %s
         """, (user['cargo'],))
         permissions = cursor.fetchall()
+
+        # Apenas retornar os ids das permissões
+        permission_ids = [permission['id_pagina'] for permission in permissions]
 
         # Gerar token JWT
         token = jwt.encode({
             "sub": user['usuario'],
             "nome": user['nome'],
             "cargo": user['cargo'],
-            "ids": [permission['id_pagina'] for permission in permissions],  # IDs das páginas
+            "ids": permission_ids,  # Apenas os IDs das permissões
             "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
         }, app.config['SECRET_KEY'], algorithm="HS256")
 
         return jsonify({
             "message": "Autenticação bem-sucedida",
             "token": token,
-            "permissions": permissions  # Retornar permissões para o front-end (opcional)
+            "permissions": permission_ids  # Retornar apenas os IDs das permissões
         }), 200
 
     except Error as e:
