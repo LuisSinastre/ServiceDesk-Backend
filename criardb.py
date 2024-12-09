@@ -1,40 +1,41 @@
 import sqlite3
 
-# Conectar ao banco de dados SQLite
-conn = sqlite3.connect("bdservicedesk.db")
-cursor = conn.cursor()
+def create_and_populate_table():
+    # Conexão com o banco SQLite
+    connection = sqlite3.connect("bdservicedesk.db")
+    cursor = connection.cursor()
 
-# Criar tabela pages_roles
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS pages_roles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cargo TEXT NOT NULL,
-    pagina_permitida TEXT NOT NULL,
-    id_pagina INTEGER NOT NULL
-)
-""")
+    # Criar a tabela
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chamados (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cargo TEXT NOT NULL,
+            tipo_de_chamado TEXT NOT NULL,
+            submotivo TEXT NOT NULL,
+            detalhamento TEXT NOT NULL,
+            aprovador TEXT NOT NULL,
+            tratamento TEXT NOT NULL
+        )
+    """)
 
-# Inserir dados fornecidos
-dados = [
-    ("GERENTE", "ABERTURA", 1),
-    ("GERENTE", "CONSULTA", 2),
-    ("GERENTE", "CADASTRO", 3),
-    ("ANALISTA", "ABERTURA", 1),
-    ("ANALISTA", "CONSULTA", 2),
-    ("ANALISTA", "TRATAMENTO", 4),
-    ("DEMAIS", "ABERTURA", 1),
-    ("DEMAIS", "CONSULTA", 2),
-]
+    # Dados para serem adicionados
+    data = [
+        ("SUPERVISOR", "SOLICITAÇÃO", "MANUTENÇÃO", "HEADSET COM DEFEITO", "FIELD SERVICE", "FIELDSERVICE"),
+        ("GERENTE", "SOLICITAÇÃO", "MANUTENÇÃO", "HEADSET COM DEFEITO", "FIELD SERVICE", "FIELDSERVICE")
+    ]
 
-# Inserir dados no banco
-cursor.executemany("""
-INSERT INTO pages_roles (cargo, pagina_permitida, id_pagina) 
-VALUES (?, ?, ?)
-""", dados)
+    # Inserir dados
+    cursor.executemany("""
+        INSERT INTO chamados (cargo, tipo_de_chamado, submotivo, detalhamento, aprovador, tratamento)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, data)
 
-# Confirmar alterações
-conn.commit()
-print("Tabela criada e dados inseridos com sucesso!")
+    # Confirmar transações
+    connection.commit()
 
-# Fechar conexão
-conn.close()
+    # Fechar a conexão
+    connection.close()
+    print("Tabela criada e dados populados com sucesso!")
+
+# Executar a função
+create_and_populate_table()
