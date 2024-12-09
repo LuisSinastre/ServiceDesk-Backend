@@ -17,7 +17,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Definir chave secreta a partir do .env ou diretamente no código
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+secret = app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
 
 
 # Conexão SQLite
@@ -33,6 +33,15 @@ def create_connection():
         return connection
     except Exception as e:
         print(f"Erro na conexão SQLite: {e}")
+        return None
+
+
+def decode_token(token):
+    try:
+        decoded = jwt.decode(token, secret, algorithms=["HS256"])
+        return decoded.get("cargo")
+    except jwt.InvalidTokenError:
+        print("Token inválido ou erro na decodificação")
         return None
 
 
@@ -131,7 +140,6 @@ def authenticate_user():
         return jsonify({
             "message": "Autenticação bem-sucedida",
             "token": token,
-            "permissions": permission_ids
         }), 200
 
     except Exception as e:
@@ -178,6 +186,41 @@ def add_user():
     finally:
         connection.close()
 
+# Endpoint para adicionar um novo cargo em pages_roles
+@app.route('/pagesroles', methods=['POST'])
+def add_page_role():
+    data = request.get_json()
+
+    # Verificação dos dados
+    if not data.get('cargo') or not data.get('id_pagina') or not data.get('pagina_permitida'):
+        return jsonify({"error": "Todos os campos são obrigatórios"}), 400
+
+    connection = create_connection()
+    if not connection:
+        return jsonify({"error": "Não foi possível conectar com o banco"}), 500
+
+    try:
+        cursor = connection.cursor()
+
+        # Verificar se o usuário já existe
+        cursor.execute("SELECT cargo FROM pages_roles WHERE id_pagina = ?", (data['id_pagina'],))
+        if cursor.fetchone():
+            return jsonify({"error": "Página já cadastrada para esse cargo"}), 400
+
+        # Insere os dados do usuário
+        cursor.execute("""
+            INSERT INTO pages_roles (cargo, id_pagina, pagina_permitida)
+            VALUES (?, ?, ?)
+            """, (data['cargo'], data['id_pagina'], data['pagina_permitida']))
+        connection.commit()
+
+        return jsonify({"message": "Permissão adicionada com sucesso"}), 201
+
+    except Exception as e:
+        return jsonify({"error": f"Erro ao adicionar a permissão: {e}"}), 500
+    finally:
+        connection.close()
+
 
 # Endpoint para excluir um usuário pelo usuário
 @app.route('/users/<string:usuario>', methods=['DELETE'])
@@ -203,6 +246,63 @@ def delete_user(usuario):
     except Exception as e:
         return jsonify({"error": f"Erro ao excluir o usuário: {e}"}), 500
     finally:
+        connection.close()
+
+
+
+
+
+
+
+
+
+
+
+
+# Essa parte aqui eu vou deixar destinada para chamadas ao backend durante a navegação, por exemplo, pegar os chamados que o usuário pode abrir.
+# Endpoint para retornar todos os chamados disponíveis
+@app.route('/chamados', methods=['GET'])
+def get_chamados():
+    # Obter o token no cabeçalho
+    token = request.headers.get("Authorization")
+    if not token:
+        return jsonify({"error": "Token não fornecido"}), 401
+
+    # Limpar o token do formato 'Bearer' e decodificar
+    token = token.replace("Bearer ", "")
+    cargo = decode_token(token)
+
+    if not cargo:
+        return jsonify({"error": "Token inválido ou expirado"}), 401
+
+    # Criar conexão com banco
+    connection = create_connection()
+    if not connection:
+        return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
+
+    try:
+        cursor = connection.cursor()
+        
+        # Log: Verificar qual usuário foi decodificado do token
+        print("Token decodificado com sucesso. Usuário:", cargo)
+
+        # Executar a consulta SQL
+        cursor.execute("SELECT * FROM chamados WHERE cargo = ?", (cargo,))
+        
+        # Log: Verificar a execução da consulta SQL
+        chamados = cursor.fetchall()
+        print("Dados retornados pela consulta:", chamados)
+
+        # Retornar os dados no formato JSON
+        return jsonify([dict(chamado) for chamado in chamados]), 200
+
+    except Exception as e:
+        # Log: Capturar erro no SQL
+        print("Erro ao buscar chamados:", e)
+        return jsonify({"error": f"Erro ao buscar chamados: {e}"}), 500
+
+    finally:
+        # Fechar a conexão do banco
         connection.close()
 
 
