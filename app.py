@@ -6,6 +6,7 @@ import os
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_cors import CORS
+import json
 
 
 # Carregar variáveis de ambiente do arquivo .env
@@ -39,10 +40,14 @@ def create_connection():
 def decode_token(token):
     try:
         decoded = jwt.decode(token, secret, algorithms=["HS256"])
-        return decoded.get("cargo")
+        # Retornar os dados no mesmo dicionário
+        user_id = int(decoded.get("sub"))
+        cargo = decoded.get("cargo")
+        return user_id, cargo
     except jwt.InvalidTokenError:
         print("Token inválido ou erro na decodificação")
         return None
+
 
 
 # Endpoint para listar usuários
@@ -261,19 +266,102 @@ def delete_user(usuario):
 
 # Essa parte aqui eu vou deixar destinada para chamadas ao backend durante a navegação, por exemplo, pegar os chamados que o usuário pode abrir.
 # Endpoint para retornar todos os chamados disponíveis
-@app.route('/chamados', methods=['GET'])
+@app.route('/ticket_types', methods=['GET'])
 def get_chamados():
     # Obter o token no cabeçalho
     token = request.headers.get("Authorization")
     if not token:
+        print("Nenhum token no cabeçalho")
         return jsonify({"error": "Token não fornecido"}), 401
 
     # Limpar o token do formato 'Bearer' e decodificar
     token = token.replace("Bearer ", "")
-    cargo = decode_token(token)
+    print("Token limpo:", token)
 
-    if not cargo:
+    decoded_token = decode_token(token)  # Recuperando os dados do token
+    print("Decoded token:", decoded_token)
+
+    if not decoded_token:
+        print("Erro ao validar token")
         return jsonify({"error": "Token inválido ou expirado"}), 401
+
+    user_id, cargo = decoded_token  # Destructuring da tupla
+    print("User ID:", user_id)
+    print("Cargo extraído do token:", cargo)
+
+    # Criar conexão com banco
+    connection = create_connection()
+    if not connection:
+        print("Falha ao conectar com o banco")
+        return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
+
+    try:
+        cursor = connection.cursor()
+        cursor.execute("SELECT id, tipo_chamado, submotivo, formulario FROM ticket_types WHERE cargo = ?", (cargo,))
+        chamados = cursor.fetchall()
+        
+        print("Resultados da consulta ao banco:", chamados)
+
+        dados_retornados = []
+        for chamado in chamados:
+            try:
+                formulario_dados = json.loads(chamado[3]) if chamado[3] else {}
+            except json.JSONDecodeError as e:
+                print("Erro ao processar JSON:", e)
+                formulario_dados = {}
+
+            dados_retornados.append({
+                "id": chamado[0],
+                "tipo_chamado": chamado[1],
+                "submotivo": chamado[2],
+                "formulario": formulario_dados
+            })
+
+        print("Dados preparados para resposta:", dados_retornados)
+
+        return jsonify(dados_retornados), 200
+
+    except Exception as e:
+        print("Erro ao buscar chamados:", e)
+        return jsonify({"error": f"Erro ao buscar chamados: {e}"}), 500
+
+    finally:
+        connection.close()
+        print("Conexão com banco fechada")
+
+
+
+
+# Abrir um chamado
+@app.route('/open_ticket', methods=['POST'])
+def open_ticket():
+    # Obter o token no cabeçalho
+    token = request.headers.get("Authorization")
+    if not token:
+        print("Nenhum token no cabeçalho")
+        return jsonify({"error": "Token não fornecido"}), 401
+
+    # Limpar o token do formato 'Bearer' e decodificar
+    token = token.replace("Bearer ", "")
+    print("Token limpo:", token)
+
+    decoded_token = decode_token(token)  # Recuperando os dados do token
+    print("Decoded token:", decoded_token)
+
+    if not decoded_token:
+        print("Erro ao validar token")
+        return jsonify({"error": "Token inválido ou expirado"}), 401
+
+    # Destructuring da tupla retornada
+    user_id, cargo = decoded_token
+    print("User ID:", user_id)
+    print("Cargo extraído do token:", cargo)
+
+    # Obter dados do formulário da requisição
+    data = request.get_json()
+    ticket_type = data.get('ticket_type')
+    submotivo = data.get('submotivo')
+    form = json.dumps(data.get('form'))
 
     # Criar conexão com banco
     connection = create_connection()
@@ -283,28 +371,126 @@ def get_chamados():
     try:
         cursor = connection.cursor()
         
-        # Log: Verificar qual usuário foi decodificado do token
-        print("Token decodificado com sucesso. Usuário:", cargo)
+        # Inserir chamado no banco com o ID do usuário
+        cursor.execute(
+            "INSERT INTO tickets (ticket_type, submotive, form, user) VALUES (?, ?, ?, ?)",
+            (ticket_type, submotivo, form, user_id)
+        )
+        connection.commit()
 
-        # Executar a consulta SQL
-        cursor.execute("SELECT * FROM chamados WHERE cargo = ?", (cargo,))
-        
-        # Log: Verificar a execução da consulta SQL
-        chamados = cursor.fetchall()
-        print("Dados retornados pela consulta:", chamados)
+        # Obter o número do chamado recém-criado
+        ticket_number = cursor.lastrowid
 
-        # Retornar os dados no formato JSON
-        return jsonify([dict(chamado) for chamado in chamados]), 200
+        return jsonify({"message": "Chamado aberto com sucesso", "ticket_number": ticket_number}), 201
 
     except Exception as e:
-        # Log: Capturar erro no SQL
-        print("Erro ao buscar chamados:", e)
-        return jsonify({"error": f"Erro ao buscar chamados: {e}"}), 500
+        print("Erro ao abrir chamado:", e)
+        return jsonify({"error": f"Erro ao abrir chamado: {e}"}), 500
 
     finally:
-        # Fechar a conexão do banco
         connection.close()
 
+        
+
+
+# Listar os chamados abertos
+@app.route('/list_tickets', methods=['GET'])
+def list_tickets():
+    try:
+        # Obter o token no cabeçalho
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"error": "Token não fornecido"}), 401
+
+        # Limpar o token e validar
+        token = token.replace("Bearer ", "")
+        decoded_token = decode_token(token)
+        
+        if not decoded_token:
+            return jsonify({"error": "Token inválido ou expirado"}), 401
+
+        user_id = decoded_token[0]  # Obter o user_id do token
+        connection = create_connection()
+        if not connection:
+            return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
+
+        # Obter o termo de busca (query string)
+        search_query = request.args.get("search", "").strip()
+
+        sql_query = "SELECT ticket_number, ticket_type, submotive, form FROM tickets WHERE user = ?"
+        params = [user_id]
+
+        if search_query:
+            sql_query += " AND (ticket_number = ? OR ticket_type LIKE ? OR submotive LIKE ?)"
+            params.extend([search_query, f"%{search_query}%", f"%{search_query}%"])
+
+        cursor = connection.cursor()
+        cursor.execute(sql_query, params)
+
+        tickets = cursor.fetchall()
+        return jsonify([
+            {
+                "ticket_number": ticket[0],
+                "ticket_type": ticket[1],
+                "submotive": ticket[2],
+                "form": json.loads(ticket[3]) if ticket[3] else {}
+            } for ticket in tickets
+        ]), 200
+
+    except Exception as e:
+        print("Erro ao listar os chamados:", e)
+        return jsonify({"error": "Erro interno no servidor"}), 500
+    finally:
+        connection.close()
+
+
+
+
+
+# Endpoint para detalhemnto do ticket
+@app.route('/ticket_detail/<int:ticket_number>', methods=['GET'])
+def ticket_detail(ticket_number):
+    try:
+        # Obter o token no cabeçalho
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"error": "Token não fornecido"}), 401
+
+        # Limpar o token e validar
+        token = token.replace("Bearer ", "")
+        decoded_token = decode_token(token)
+        
+        if not decoded_token:
+            return jsonify({"error": "Token inválido ou expirado"}), 401
+
+        user_id = decoded_token[0]  # Recuperando o ID do usuário
+        connection = create_connection()
+        
+        if not connection:
+            return jsonify({"error": "Erro ao conectar com o banco"}), 500
+
+        # Buscar detalhes do chamado pelo ticket_number
+        cursor = connection.cursor()
+        cursor.execute("SELECT * FROM tickets WHERE ticket_number = ? AND user = ?", (ticket_number, user_id))
+        ticket = cursor.fetchone()
+
+        if not ticket:
+            return jsonify({"error": "Chamado não encontrado ou acesso negado"}), 404
+
+        # Retornar os detalhes
+        ticket_data = {
+            "ticket_number": ticket[0],
+            "ticket_type": ticket[1],
+            "submotive": ticket[2],
+            "form": json.loads(ticket[3]),
+            "user": ticket[4]
+        }
+        return jsonify(ticket_data), 200
+    except Exception as e:
+        print("Erro ao buscar detalhes do chamado:", e)
+        return jsonify({"error": "Erro interno no servidor"}), 500
+    finally:
+        connection.close()
 
 if __name__ == "__main__":
     app.run(debug=True)
