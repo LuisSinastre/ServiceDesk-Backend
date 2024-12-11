@@ -50,51 +50,6 @@ def decode_token(token):
 
 
 
-# Endpoint para listar usuários
-@app.route('/users', methods=['GET'])
-def get_users():
-    connection = create_connection()
-    if not connection:
-        return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
-    try:
-        cursor = connection.cursor()
-
-        # Consultando os dados
-        cursor.execute("SELECT * FROM users")
-        users = cursor.fetchall()
-
-        # Garantir que os dados sejam retornados com caracteres especiais corretamente
-        response = jsonify([dict(user) for user in users])
-        response.headers.add('Content-Type', 'application/json; charset=utf-8')
-        return response
-    except Exception as e:
-        return jsonify({"error": f"Erro ao consultar os usuários: {e}"}), 500
-    finally:
-        connection.close()
-
-
-# Endpoint para o BD de páginas disponíveis
-@app.route('/pagesroles', methods=['GET'])
-def get_pages():
-    connection = create_connection()
-    if not connection:
-        return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
-    try:
-        cursor = connection.cursor()
-
-        # Consultando os dados
-        cursor.execute("SELECT * FROM pages_roles")
-        pages_roles = cursor.fetchall()
-
-        response = jsonify([dict(role) for role in pages_roles])
-        response.headers.add('Content-Type', 'application/json; charset=utf-8')
-        return response
-    except Exception as e:
-        return jsonify({"error": f"Erro ao consultar as permissões: {e}"}), 500
-    finally:
-        connection.close()
-
-
 # Endpoint para autenticar o login
 @app.route('/login', methods=['POST'])
 def authenticate_user():
@@ -153,6 +108,89 @@ def authenticate_user():
         connection.close()
 
 
+
+# Endpoint para adicionar um novo cargo em pages_roles
+@app.route('/pagesroles', methods=['POST'])
+def add_page_role():
+    data = request.get_json()
+
+    # Verificação dos dados
+    if not data.get('cargo') or not data.get('id_pagina') or not data.get('pagina_permitida'):
+        return jsonify({"error": "Todos os campos são obrigatórios"}), 400
+
+    connection = create_connection()
+    if not connection:
+        return jsonify({"error": "Não foi possível conectar com o banco"}), 500
+
+    try:
+        cursor = connection.cursor()
+
+        # Verificar se o usuário já existe
+        cursor.execute("SELECT cargo FROM pages_roles WHERE id_pagina = ?", (data['id_pagina'],))
+        if cursor.fetchone():
+            return jsonify({"error": "Página já cadastrada para esse cargo"}), 400
+
+        # Insere os dados do usuário
+        cursor.execute("""
+            INSERT INTO pages_roles (cargo, id_pagina, pagina_permitida)
+            VALUES (?, ?, ?)
+            """, (data['cargo'], data['id_pagina'], data['pagina_permitida']))
+        connection.commit()
+
+        return jsonify({"message": "Permissão adicionada com sucesso"}), 201
+
+    except Exception as e:
+        return jsonify({"error": f"Erro ao adicionar a permissão: {e}"}), 500
+    finally:
+        connection.close()
+
+
+# Endpoint para o BD de páginas disponíveis
+@app.route('/pagesroles', methods=['GET'])
+def get_pages():
+    connection = create_connection()
+    if not connection:
+        return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
+    try:
+        cursor = connection.cursor()
+
+        # Consultando os dados
+        cursor.execute("SELECT * FROM pages_roles")
+        pages_roles = cursor.fetchall()
+
+        response = jsonify([dict(role) for role in pages_roles])
+        response.headers.add('Content-Type', 'application/json; charset=utf-8')
+        return response
+    except Exception as e:
+        return jsonify({"error": f"Erro ao consultar as permissões: {e}"}), 500
+    finally:
+        connection.close()
+
+
+
+# Endpoint para listar usuários
+@app.route('/users', methods=['GET'])
+def get_users():
+    connection = create_connection()
+    if not connection:
+        return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
+    try:
+        cursor = connection.cursor()
+
+        # Consultando os dados
+        cursor.execute("SELECT * FROM users")
+        users = cursor.fetchall()
+
+        # Garantir que os dados sejam retornados com caracteres especiais corretamente
+        response = jsonify([dict(user) for user in users])
+        response.headers.add('Content-Type', 'application/json; charset=utf-8')
+        return response
+    except Exception as e:
+        return jsonify({"error": f"Erro ao consultar os usuários: {e}"}), 500
+    finally:
+        connection.close()
+
+
 # Endpoint para adicionar um novo usuário
 @app.route('/users', methods=['POST'])
 def add_user():
@@ -191,41 +229,6 @@ def add_user():
     finally:
         connection.close()
 
-# Endpoint para adicionar um novo cargo em pages_roles
-@app.route('/pagesroles', methods=['POST'])
-def add_page_role():
-    data = request.get_json()
-
-    # Verificação dos dados
-    if not data.get('cargo') or not data.get('id_pagina') or not data.get('pagina_permitida'):
-        return jsonify({"error": "Todos os campos são obrigatórios"}), 400
-
-    connection = create_connection()
-    if not connection:
-        return jsonify({"error": "Não foi possível conectar com o banco"}), 500
-
-    try:
-        cursor = connection.cursor()
-
-        # Verificar se o usuário já existe
-        cursor.execute("SELECT cargo FROM pages_roles WHERE id_pagina = ?", (data['id_pagina'],))
-        if cursor.fetchone():
-            return jsonify({"error": "Página já cadastrada para esse cargo"}), 400
-
-        # Insere os dados do usuário
-        cursor.execute("""
-            INSERT INTO pages_roles (cargo, id_pagina, pagina_permitida)
-            VALUES (?, ?, ?)
-            """, (data['cargo'], data['id_pagina'], data['pagina_permitida']))
-        connection.commit()
-
-        return jsonify({"message": "Permissão adicionada com sucesso"}), 201
-
-    except Exception as e:
-        return jsonify({"error": f"Erro ao adicionar a permissão: {e}"}), 500
-    finally:
-        connection.close()
-
 
 # Endpoint para excluir um usuário pelo usuário
 @app.route('/users/<string:usuario>', methods=['DELETE'])
@@ -252,12 +255,6 @@ def delete_user(usuario):
         return jsonify({"error": f"Erro ao excluir o usuário: {e}"}), 500
     finally:
         connection.close()
-
-
-
-
-
-
 
 
 
@@ -371,10 +368,14 @@ def open_ticket():
     try:
         cursor = connection.cursor()
         
+        # Definição do status de chamado aberto ao abrir o chamado
+        ticket_status = "Aberto"
+        ticket_open_date_time = current_datetime = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+
         # Inserir chamado no banco com o ID do usuário
         cursor.execute(
-            "INSERT INTO tickets (ticket_type, submotive, form, user) VALUES (?, ?, ?, ?)",
-            (ticket_type, submotivo, form, user_id)
+            "INSERT INTO tickets (ticket_type, submotive, form, user, ticket_status, ticket_open_date_time) VALUES (?, ?, ?, ?, ?, ?)",
+            (ticket_type, submotivo, form, user_id, ticket_status, ticket_open_date_time)
         )
         connection.commit()
 
@@ -483,7 +484,9 @@ def ticket_detail(ticket_number):
             "ticket_type": ticket[1],
             "submotive": ticket[2],
             "form": json.loads(ticket[3]),
-            "user": ticket[4]
+            "user": ticket[4],
+            "ticket_status": ticket[5],
+            "ticket_open_date_time": ticket[6]
         }
         return jsonify(ticket_data), 200
     except Exception as e:
@@ -491,6 +494,14 @@ def ticket_detail(ticket_number):
         return jsonify({"error": "Erro interno no servidor"}), 500
     finally:
         connection.close()
+
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
     app.run(debug=True)
