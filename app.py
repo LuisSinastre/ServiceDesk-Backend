@@ -8,7 +8,6 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_cors import CORS
 import json
 
-
 # Carregar variáveis de ambiente do arquivo .env
 load_dotenv('config.env')
 
@@ -19,7 +18,6 @@ CORS(app)
 
 # Definir chave secreta a partir do .env ou diretamente no código
 secret = app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
-
 
 # Conexão SQLite
 def create_connection():
@@ -36,18 +34,21 @@ def create_connection():
         print(f"Erro na conexão SQLite: {e}")
         return None
 
-
 def decode_token(token):
     try:
-        decoded = jwt.decode(token, secret, algorithms=["HS256"])
-        # Retornar os dados no mesmo dicionário
-        user_id = int(decoded.get("sub"))
-        cargo = decoded.get("cargo")
-        return user_id, cargo
+        # Usando a chave secreta diretamente de app.config
+        decoded = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+        
+        # Retornar um dicionário com os dados do token
+        return {
+            "user": int(decoded.get("user")),
+            "position": decoded.get("position"),
+            "profile": decoded.get("profile")
+        }
+    
     except jwt.InvalidTokenError:
         print("Token inválido ou erro na decodificação")
         return None
-
 
 
 # Endpoint para autenticar o login
@@ -67,36 +68,44 @@ def authenticate_user():
         cursor = connection.cursor()
 
         # Consultar o usuário pelo nome de usuário
-        cursor.execute("SELECT * FROM users WHERE usuario = ?", (data['username'],))
+        cursor.execute("SELECT * FROM users WHERE user = ?", (data['username'],))
         user = cursor.fetchone()
 
         if not user:
             return jsonify({"error": "Usuário não encontrado"}), 404
 
         # Verificar se a senha fornecida está correta
-        if not check_password_hash(user['senha'], data['password']):
+        if not check_password_hash(user['password'], data['password']):
             return jsonify({"error": "Senha incorreta"}), 401
 
+        
+        # Recupera informações do usuário
+        cursor.execute("SELECT * FROM general_data WHERE register = ?", (data['username'],))
+        user_data = cursor.fetchone()
+        
+        
         # Recuperar permissões com base no cargo
         cursor.execute("""
-            SELECT id_pagina
+            SELECT page_id
             FROM pages_roles
-            WHERE cargo = ?
-        """, (user['cargo'],))
+            WHERE profile = ?
+        """, (user_data['profile'],))
         permissions = cursor.fetchall()
 
         # Apenas retornar os ids das permissões
-        permission_ids = [permission['id_pagina'] for permission in permissions]
+        permission_ids = [permission['page_id'] for permission in permissions]
 
         # Gerar token JWT
         token = jwt.encode({
-            "sub": user['usuario'],
-            "nome": user['nome'],
-            "cargo": user['cargo'],
+            "user": user['user'],
+            "name": user_data['name'],
+            "position": user_data['position'],
+            "manager": user_data['manager'],
+            "profile": user_data['profile'],
             "ids": permission_ids,  # Apenas os IDs das permissões
             "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
         }, app.config['SECRET_KEY'], algorithm="HS256")
-
+        
         return jsonify({
             "message": "Autenticação bem-sucedida",
             "token": token,
@@ -108,163 +117,10 @@ def authenticate_user():
         connection.close()
 
 
-
-# Endpoint para adicionar um novo cargo em pages_roles
-@app.route('/pagesroles', methods=['POST'])
-def add_page_role():
-    data = request.get_json()
-
-    # Verificação dos dados
-    if not data.get('cargo') or not data.get('id_pagina') or not data.get('pagina_permitida'):
-        return jsonify({"error": "Todos os campos são obrigatórios"}), 400
-
-    connection = create_connection()
-    if not connection:
-        return jsonify({"error": "Não foi possível conectar com o banco"}), 500
-
-    try:
-        cursor = connection.cursor()
-
-        # Verificar se o usuário já existe
-        cursor.execute("SELECT cargo FROM pages_roles WHERE id_pagina = ?", (data['id_pagina'],))
-        if cursor.fetchone():
-            return jsonify({"error": "Página já cadastrada para esse cargo"}), 400
-
-        # Insere os dados do usuário
-        cursor.execute("""
-            INSERT INTO pages_roles (cargo, id_pagina, pagina_permitida)
-            VALUES (?, ?, ?)
-            """, (data['cargo'], data['id_pagina'], data['pagina_permitida']))
-        connection.commit()
-
-        return jsonify({"message": "Permissão adicionada com sucesso"}), 201
-
-    except Exception as e:
-        return jsonify({"error": f"Erro ao adicionar a permissão: {e}"}), 500
-    finally:
-        connection.close()
-
-
-# Endpoint para o BD de páginas disponíveis
-@app.route('/pagesroles', methods=['GET'])
-def get_pages():
-    connection = create_connection()
-    if not connection:
-        return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
-    try:
-        cursor = connection.cursor()
-
-        # Consultando os dados
-        cursor.execute("SELECT * FROM pages_roles")
-        pages_roles = cursor.fetchall()
-
-        response = jsonify([dict(role) for role in pages_roles])
-        response.headers.add('Content-Type', 'application/json; charset=utf-8')
-        return response
-    except Exception as e:
-        return jsonify({"error": f"Erro ao consultar as permissões: {e}"}), 500
-    finally:
-        connection.close()
-
-
-
-# Endpoint para listar usuários
-@app.route('/users', methods=['GET'])
-def get_users():
-    connection = create_connection()
-    if not connection:
-        return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
-    try:
-        cursor = connection.cursor()
-
-        # Consultando os dados
-        cursor.execute("SELECT * FROM users")
-        users = cursor.fetchall()
-
-        # Garantir que os dados sejam retornados com caracteres especiais corretamente
-        response = jsonify([dict(user) for user in users])
-        response.headers.add('Content-Type', 'application/json; charset=utf-8')
-        return response
-    except Exception as e:
-        return jsonify({"error": f"Erro ao consultar os usuários: {e}"}), 500
-    finally:
-        connection.close()
-
-
-# Endpoint para adicionar um novo usuário
-@app.route('/users', methods=['POST'])
-def add_user():
-    data = request.get_json()
-
-    # Verificação dos dados
-    if not data.get('usuario') or not data.get('senha') or not data.get('nome') or not data.get('cargo') or not data.get('superior'):
-        return jsonify({"error": "Todos os campos são obrigatórios"}), 400
-
-    connection = create_connection()
-    if not connection:
-        return jsonify({"error": "Não foi possível conectar com o banco"}), 500
-
-    try:
-        cursor = connection.cursor()
-
-        # Verificar se o usuário já existe
-        cursor.execute("SELECT usuario FROM users WHERE usuario = ?", (data['usuario'],))
-        if cursor.fetchone():
-            return jsonify({"error": "Usuário já cadastrado"}), 400
-
-        # Gerar o hash da senha
-        hashed_password = generate_password_hash(data['senha'])
-
-        # Insere os dados do usuário
-        cursor.execute("""
-            INSERT INTO users (usuario, senha, nome, cargo, superior)
-            VALUES (?, ?, ?, ?, ?)
-        """, (data['usuario'], hashed_password, data['nome'], data['cargo'], data['superior']))
-        connection.commit()
-
-        return jsonify({"message": "Usuário adicionado com sucesso"}), 201
-
-    except Exception as e:
-        return jsonify({"error": f"Erro ao adicionar o usuário: {e}"}), 500
-    finally:
-        connection.close()
-
-
-# Endpoint para excluir um usuário pelo usuário
-@app.route('/users/<string:usuario>', methods=['DELETE'])
-def delete_user(usuario):
-    connection = create_connection()
-    if not connection:
-        return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
-
-    try:
-        cursor = connection.cursor()
-
-        # Verificar se o usuário existe
-        cursor.execute("SELECT usuario FROM users WHERE usuario = ?", (usuario,))
-        if not cursor.fetchone():
-            return jsonify({"error": "Usuário não encontrado"}), 404
-
-        # Excluir o usuário
-        cursor.execute("DELETE FROM users WHERE usuario = ?", (usuario,))
-        connection.commit()
-
-        return jsonify({"message": f"Usuário {usuario} excluído com sucesso"}), 200
-
-    except Exception as e:
-        return jsonify({"error": f"Erro ao excluir o usuário: {e}"}), 500
-    finally:
-        connection.close()
-
-
-
-
-
-
 # Essa parte aqui eu vou deixar destinada para chamadas ao backend durante a navegação, por exemplo, pegar os chamados que o usuário pode abrir.
-# Endpoint para retornar todos os chamados disponíveis
+# Endpoint para retornar os chamados disponíveis
 @app.route('/ticket_types', methods=['GET'])
-def get_chamados():
+def get_ticket_type():
     # Obter o token no cabeçalho
     token = request.headers.get("Authorization")
     if not token:
@@ -273,20 +129,16 @@ def get_chamados():
 
     # Limpar o token do formato 'Bearer' e decodificar
     token = token.replace("Bearer ", "")
-    print("Token limpo:", token)
-
     decoded_token = decode_token(token)  # Recuperando os dados do token
-    print("Decoded token:", decoded_token)
 
-    if not decoded_token:
-        print("Erro ao validar token")
+    if not decoded_token or not isinstance(decoded_token, dict):
+        print("Erro ao validar token ou formato inválido")
         return jsonify({"error": "Token inválido ou expirado"}), 401
 
-    user_id, cargo = decoded_token  # Destructuring da tupla
-    print("User ID:", user_id)
-    print("Cargo extraído do token:", cargo)
+    # Recuperar informações do token
+    profile = decoded_token.get("profile")
 
-    # Criar conexão com banco
+    # Criar conexão com o banco
     connection = create_connection()
     if not connection:
         print("Falha ao conectar com o banco")
@@ -294,88 +146,111 @@ def get_chamados():
 
     try:
         cursor = connection.cursor()
-        cursor.execute("SELECT id, tipo_chamado, submotivo, formulario FROM ticket_types WHERE cargo = ?", (cargo,))
-        chamados = cursor.fetchall()
-        
-        print("Resultados da consulta ao banco:", chamados)
+        # Consulta ao banco
+        cursor.execute("SELECT ticket_type, submotive, form FROM ticket_types WHERE profile = ?", (profile,))
+        tickets = cursor.fetchall()
 
-        dados_retornados = []
-        for chamado in chamados:
+        print("Resultados da consulta ao banco:", tickets)
+
+        # Processar dados retornados
+        returned_data = []
+        for ticket in tickets:
             try:
-                formulario_dados = json.loads(chamado[3]) if chamado[3] else {}
+                # Carregar o JSON do campo "form", se existir
+                form_data = json.loads(ticket[2]) if ticket[2] else {}
             except json.JSONDecodeError as e:
                 print("Erro ao processar JSON:", e)
-                formulario_dados = {}
+                form_data = {}
 
-            dados_retornados.append({
-                "id": chamado[0],
-                "tipo_chamado": chamado[1],
-                "submotivo": chamado[2],
-                "formulario": formulario_dados
+            returned_data.append({
+                "ticket_type": ticket[0],
+                "submotive": ticket[1],
+                "form": form_data
             })
 
-        print("Dados preparados para resposta:", dados_retornados)
-
-        return jsonify(dados_retornados), 200
+        return jsonify(returned_data), 200
 
     except Exception as e:
         print("Erro ao buscar chamados:", e)
-        return jsonify({"error": f"Erro ao buscar chamados: {e}"}), 500
+        return jsonify({"error": "Erro ao buscar dados dos chamados"}), 500
 
     finally:
         connection.close()
         print("Conexão com banco fechada")
 
 
-
-
-# Abrir um chamado
+# Endpoint para abrir um chamado
 @app.route('/open_ticket', methods=['POST'])
 def open_ticket():
     # Obter o token no cabeçalho
     token = request.headers.get("Authorization")
     if not token:
-        print("Nenhum token no cabeçalho")
         return jsonify({"error": "Token não fornecido"}), 401
 
     # Limpar o token do formato 'Bearer' e decodificar
     token = token.replace("Bearer ", "")
-    print("Token limpo:", token)
-
     decoded_token = decode_token(token)  # Recuperando os dados do token
-    print("Decoded token:", decoded_token)
 
     if not decoded_token:
-        print("Erro ao validar token")
         return jsonify({"error": "Token inválido ou expirado"}), 401
 
-    # Destructuring da tupla retornada
-    user_id, cargo = decoded_token
-    print("User ID:", user_id)
-    print("Cargo extraído do token:", cargo)
+    # Recuperar informações do token
+    profile = decoded_token.get("profile")
+    user = decoded_token.get("user")
 
     # Obter dados do formulário da requisição
     data = request.get_json()
     ticket_type = data.get('ticket_type')
-    submotivo = data.get('submotivo')
+    submotive = data.get('submotive')
     form = json.dumps(data.get('form'))
+    motive_submotive = f"{ticket_type}/{submotive}" if ticket_type and submotive else None
 
     # Criar conexão com banco
     connection = create_connection()
     if not connection:
         return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
 
+    # Verifica se é necessário aprovação
     try:
         cursor = connection.cursor()
-        
-        # Definição do status de chamado aberto ao abrir o chamado
-        ticket_status = "Aberto"
-        ticket_open_date_time = current_datetime = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
 
-        # Inserir chamado no banco com o ID do usuário
+        # Consulta das regras de aprovação do chamado
+        cursor.execute("""
+            SELECT approval_sequence
+            FROM ticket_types
+            WHERE motive_submotive = ? AND profile = ?
+        """, (motive_submotive, profile))
+        approval_roles = cursor.fetchall()
+
+
+        approval_sequence = approval_roles[0][0]
+
+        # Verifica se o resultado está vazio
+        if approval_sequence == 0:  
+            print("Chamado aberto sem necessidade de aprovação")
+            ticket_status = "Aberto"
+            next_approver = None
+
+        else:
+            ticket_status = "Aguardando Aprovação"
+            
+            
+            # Garantir que approval_sequence seja uma string
+            if isinstance(approval_sequence, int):
+                approval_sequence = str(approval_sequence)
+
+            approvers = list(map(int, approval_sequence.split(',')))
+            
+            if approvers:
+                next_approver = approvers[0]
+
+        current_datetime = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+
+
+        # Inserir chamado no banco com o ID do usuário e o próximo aprovador
         cursor.execute(
-            "INSERT INTO tickets (ticket_type, submotive, form, user, ticket_status, ticket_open_date_time) VALUES (?, ?, ?, ?, ?, ?)",
-            (ticket_type, submotivo, form, user_id, ticket_status, ticket_open_date_time)
+            "INSERT INTO tickets (ticket_type, submotive, form, user, ticket_status, ticket_open_date_time, next_approver) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ticket_type, submotive, form, user, ticket_status, current_datetime, next_approver)
         )
         connection.commit()
 
@@ -391,10 +266,8 @@ def open_ticket():
     finally:
         connection.close()
 
-        
 
-
-# Listar os chamados abertos
+# Endpoint para listar todos os chamados abertos
 @app.route('/list_tickets', methods=['GET'])
 def list_tickets():
     try:
@@ -403,14 +276,16 @@ def list_tickets():
         if not token:
             return jsonify({"error": "Token não fornecido"}), 401
 
-        # Limpar o token e validar
+        # Limpar o token do formato 'Bearer' e decodificar
         token = token.replace("Bearer ", "")
-        decoded_token = decode_token(token)
-        
+        decoded_token = decode_token(token)  # Recuperando os dados do token
+
         if not decoded_token:
             return jsonify({"error": "Token inválido ou expirado"}), 401
 
-        user_id = decoded_token[0]  # Obter o user_id do token
+        # Recuperar informações do token
+        user = decoded_token.get("user")
+
         connection = create_connection()
         if not connection:
             return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
@@ -419,7 +294,7 @@ def list_tickets():
         search_query = request.args.get("search", "").strip()
 
         sql_query = "SELECT ticket_number, ticket_type, submotive, form FROM tickets WHERE user = ?"
-        params = [user_id]
+        params = [user]
 
         if search_query:
             sql_query += " AND (ticket_number = ? OR ticket_type LIKE ? OR submotive LIKE ?)"
@@ -445,10 +320,7 @@ def list_tickets():
         connection.close()
 
 
-
-
-
-# Endpoint para detalhemnto do ticket
+# Endpoint para detalhemento do ticket
 @app.route('/ticket_detail/<int:ticket_number>', methods=['GET'])
 def ticket_detail(ticket_number):
     try:
@@ -457,22 +329,23 @@ def ticket_detail(ticket_number):
         if not token:
             return jsonify({"error": "Token não fornecido"}), 401
 
-        # Limpar o token e validar
+        # Limpar o token do formato 'Bearer' e decodificar
         token = token.replace("Bearer ", "")
-        decoded_token = decode_token(token)
-        
+        decoded_token = decode_token(token)  # Recuperando os dados do token
+
         if not decoded_token:
             return jsonify({"error": "Token inválido ou expirado"}), 401
 
-        user_id = decoded_token[0]  # Recuperando o ID do usuário
+        # Recuperar informações do token
+        user = decoded_token.get("user")
+
         connection = create_connection()
-        
         if not connection:
             return jsonify({"error": "Erro ao conectar com o banco"}), 500
 
         # Buscar detalhes do chamado pelo ticket_number
         cursor = connection.cursor()
-        cursor.execute("SELECT * FROM tickets WHERE ticket_number = ? AND user = ?", (ticket_number, user_id))
+        cursor.execute("SELECT * FROM tickets WHERE ticket_number = ? AND user = ?", (ticket_number, user))
         ticket = cursor.fetchone()
 
         if not ticket:
@@ -496,11 +369,24 @@ def ticket_detail(ticket_number):
         connection.close()
 
 
+# Endpoint para aprovar um chamado
+@app.route('/approve_ticket/<int:ticket_id>', methods=['POST'])
+def approve_ticket(ticket_id):
+    # Lógica para aprovar o ticket no banco de dados
+    connection = create_connection()
+    cursor = connection.cursor()
+    cursor.execute("UPDATE tickets SET ticket_status = 'Aprovado' WHERE id = ?", (ticket_id,))
+    connection.commit()
+    return jsonify({"message": "Chamado aprovado com sucesso."}), 200
 
-
-
-
-
+@app.route('/reject_ticket/<int:ticket_id>', methods=['POST'])
+def reject_ticket(ticket_id):
+    # Lógica para recusar o ticket no banco de dados
+    connection = create_connection()
+    cursor = connection.cursor()
+    cursor.execute("UPDATE tickets SET ticket_status = 'Recusado' WHERE id = ?", (ticket_id,))
+    connection.commit()
+    return jsonify({"message": "Chamado recusado com sucesso."}), 200
 
 
 if __name__ == "__main__":
