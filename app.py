@@ -43,7 +43,8 @@ def decode_token(token):
         return {
             "user": int(decoded.get("user")),
             "position": decoded.get("position"),
-            "profile": decoded.get("profile")
+            "profile": decoded.get("profile"),
+            "name": decoded.get("name")
         }
     
     except jwt.InvalidTokenError:
@@ -216,41 +217,39 @@ def open_ticket():
 
         # Consulta das regras de aprovação do chamado
         cursor.execute("""
-            SELECT approval_sequence
+            SELECT manager_approval, fieldservice_approval
             FROM ticket_types
             WHERE motive_submotive = ? AND profile = ?
         """, (motive_submotive, profile))
         approval_roles = cursor.fetchall()
 
+        # Recuperação dos aprovadores
+        for row in approval_roles:
+            manager_approval = row[0]
+            fieldservice_approval = row[1]
 
-        approval_sequence = approval_roles[0][0]
-
-        # Verifica se o resultado está vazio
-        if approval_sequence == 0:  
-            print("Chamado aberto sem necessidade de aprovação")
+        # Verificando se o chamado necessita de aprovação
+        if manager_approval == 0 and fieldservice_approval == 0:
             ticket_status = "Aberto"
-            next_approver = None
-
+            next_approver = 0
         else:
-            ticket_status = "Aguardando Aprovação"
-            
-            
-            # Garantir que approval_sequence seja uma string
-            if isinstance(approval_sequence, int):
-                approval_sequence = str(approval_sequence)
+            # Definindo o próximo aprovador
+            if manager_approval == 1:
+                next_approver = "GERENTE"
+                ticket_status = "Aguardando Aprovação do Gerente"
+            elif fieldservice_approval == 1:
+                next_approver = "FIELD"
+                ticket_status = "Aguardando Aprovação do Field"
 
-            approvers = list(map(int, approval_sequence.split(',')))
-            
-            if approvers:
-                next_approver = approvers[0]
-
+       
+        # Definição da data e hora de abertura do chamado
         current_datetime = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
 
 
         # Inserir chamado no banco com o ID do usuário e o próximo aprovador
         cursor.execute(
-            "INSERT INTO tickets (ticket_type, submotive, form, user, ticket_status, ticket_open_date_time, next_approver) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (ticket_type, submotive, form, user, ticket_status, current_datetime, next_approver)
+            "INSERT INTO tickets (ticket_type, submotive, motive_submotive, form, user, ticket_status, ticket_open_date_time, required_manager_approval, required_fieldservice_approval, approved_manager, approved_fieldservice, next_approver) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ticket_type, submotive, motive_submotive, form, user, ticket_status, current_datetime, manager_approval, fieldservice_approval, 0, 0, next_approver)
         )
         connection.commit()
 
@@ -285,7 +284,9 @@ def list_tickets():
 
         # Recuperar informações do token
         user = decoded_token.get("user")
-
+        name = decoded_token.get("name")
+        profile = decoded_token.get("profile")  # Obter o perfil (campo no token)
+        
         connection = create_connection()
         if not connection:
             return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
@@ -293,29 +294,52 @@ def list_tickets():
         # Obter o termo de busca (query string)
         search_query = request.args.get("search", "").strip()
 
-        sql_query = "SELECT ticket_number, ticket_type, submotive, form FROM tickets WHERE user = ?"
-        params = [user]
+        # Consultas SQL baseadas no perfil
+        if profile == "GERENTE":
+            sql_query = """
+                SELECT ticket_number, ticket_type, submotive, form
+                FROM tickets
+                WHERE user IN (
+                    SELECT register FROM general_data WHERE manager = ?
+                )
+            """
+            params = [name]
 
+        elif profile == "FIELD":
+            sql_query = "SELECT ticket_number, ticket_type, submotive, form FROM tickets"
+            params = []  # Campo de busca para FIELD
+
+        else:  # Para usuário normal
+            sql_query = "SELECT ticket_number, ticket_type, submotive, form FROM tickets WHERE user = ?"
+            params = [user]
+
+        # Adicionar a pesquisa se fornecida
         if search_query:
-            sql_query += " AND (ticket_number = ? OR ticket_type LIKE ? OR submotive LIKE ?)"
+            if 'WHERE' in sql_query:  # Se já houver uma cláusula WHERE
+                sql_query += " AND (ticket_number = ? OR ticket_type LIKE ? OR submotive LIKE ?)"
+            else:  # Caso contrário, inicia com WHERE
+                sql_query += " WHERE (ticket_number = ? OR ticket_type LIKE ? OR submotive LIKE ?)"
             params.extend([search_query, f"%{search_query}%", f"%{search_query}%"])
 
         cursor = connection.cursor()
         cursor.execute(sql_query, params)
 
         tickets = cursor.fetchall()
-        return jsonify([
-            {
-                "ticket_number": ticket[0],
-                "ticket_type": ticket[1],
-                "submotive": ticket[2],
-                "form": json.loads(ticket[3]) if ticket[3] else {}
-            } for ticket in tickets
-        ]), 200
+
+        # Verificar se há tickets retornados
+        if not tickets:
+            return jsonify({"error": "Nenhum ticket encontrado"}), 404
+
+        # Retornar os tickets
+        return jsonify([{
+            "ticket_number": ticket[0],
+            "ticket_type": ticket[1],
+            "submotive": ticket[2],
+            "form": json.loads(ticket[3]) if ticket[3] else {}
+        } for ticket in tickets]), 200
 
     except Exception as e:
-        print("Erro ao listar os chamados:", e)
-        return jsonify({"error": "Erro interno no servidor"}), 500
+        return jsonify({"error": f"Erro interno no servidor: {str(e)}"}), 500
     finally:
         connection.close()
 
@@ -338,25 +362,56 @@ def ticket_detail(ticket_number):
 
         # Recuperar informações do token
         user = decoded_token.get("user")
+        name = decoded_token.get("name")
+        profile = decoded_token.get("profile")  # Obter o perfil (campo no token)
 
         connection = create_connection()
         if not connection:
             return jsonify({"error": "Erro ao conectar com o banco"}), 500
 
-        # Buscar detalhes do chamado pelo ticket_number
+        # Consultar os detalhes do ticket com base no perfil
         cursor = connection.cursor()
-        cursor.execute("SELECT * FROM tickets WHERE ticket_number = ? AND user = ?", (ticket_number, user))
+
+        # Se o perfil for GERENTE ou FIELD, podemos acessar qualquer chamado
+        if profile == "GERENTE":
+            cursor.execute("""
+                SELECT ticket_number, ticket_type, submotive, form, user, ticket_status, ticket_open_date_time
+                FROM tickets 
+                WHERE ticket_number = ?
+            """, (ticket_number,))
+        elif profile == "FIELD":
+            cursor.execute("""
+                SELECT ticket_number, ticket_type, submotive, form, user, ticket_status, ticket_open_date_time
+                FROM tickets 
+                WHERE ticket_number = ?
+            """, (ticket_number,))
+        else:
+            # Para o usuário normal, só poderá acessar o próprio ticket
+            cursor.execute("""
+                SELECT ticket_number, ticket_type, submotive, form, user, ticket_status, ticket_open_date_time
+                FROM tickets 
+                WHERE ticket_number = ? AND user = ?
+            """, (ticket_number, user))
+
         ticket = cursor.fetchone()
 
         if not ticket:
             return jsonify({"error": "Chamado não encontrado ou acesso negado"}), 404
+
+        # Verificar se o campo 'form' não está vazio antes de tentar carregar como JSON
+        form_data = None
+        if ticket[3]:  # Verifica se 'form' tem algum valor
+            try:
+                form_data = json.loads(ticket[3])  # Tenta converter o valor em JSON
+            except json.JSONDecodeError:
+                form_data = None  # Caso o valor não seja um JSON válido
 
         # Retornar os detalhes
         ticket_data = {
             "ticket_number": ticket[0],
             "ticket_type": ticket[1],
             "submotive": ticket[2],
-            "form": json.loads(ticket[3]),
+            "form": form_data,
             "user": ticket[4],
             "ticket_status": ticket[5],
             "ticket_open_date_time": ticket[6]
@@ -366,27 +421,267 @@ def ticket_detail(ticket_number):
         print("Erro ao buscar detalhes do chamado:", e)
         return jsonify({"error": "Erro interno no servidor"}), 500
     finally:
+        if connection:
+            connection.close()
+
+
+
+# Endpoint para listar todos os chamados a serem aprovados
+@app.route('/pending_approvals', methods=['GET'])
+def list_approval():
+    try:
+        # Obter o token no cabeçalho
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"error": "Token não fornecido"}), 401
+
+        # Limpar o token do formato 'Bearer' e decodificar
+        token = token.replace("Bearer ", "")
+        decoded_token = decode_token(token)
+
+        if not decoded_token:
+            return jsonify({"error": "Token inválido ou expirado"}), 401
+
+        # Recuperar informações do token
+        profile = decoded_token.get("profile")
+        name = decoded_token.get("name")
+        
+        connection = create_connection()
+        if not connection:
+            return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
+        
+        cursor = connection.cursor()
+
+        approval_tickets = []
+
+        if profile == "GERENTE":
+            cursor.execute("""
+                SELECT t.ticket_number, t.user, t.approved_manager, t.approved_fieldservice, t.next_approver, gd.manager, gd.name, t.motive_submotive, t.form
+                FROM tickets t
+                JOIN general_data gd ON t.user = gd.register
+                WHERE t.next_approver = ?
+                AND gd.manager = ?
+            """, (profile, name))
+            approval_tickets = cursor.fetchall()
+
+        elif profile == "FIELD":
+            cursor.execute("""
+                SELECT t.ticket_number, t.user, t.approved_manager, t.approved_fieldservice, t.next_approver, gd.manager, gd.name, t.motive_submotive, t.form
+                FROM tickets t
+                JOIN general_data gd ON t.user = gd.register
+                WHERE t.next_approver = ?
+            """, (profile,))
+            approval_tickets = cursor.fetchall()
+
+        if not approval_tickets:
+            return jsonify({"message": "Nenhum ticket pendente de aprovação"}), 404
+
+        ticket_data_list = []  # Lista para armazenar os dados dos tickets
+
+        # Iterando sobre os resultados de approval_tickets
+        for ticket in approval_tickets:
+            
+            ticket_data = {
+                "ticket": ticket[0],
+                "user": ticket[1],
+                "approved_manager": ticket[2],
+                "approved_fieldservice": ticket[3],
+                "next_approver": ticket[4],
+                "manager": ticket[5],
+                "name": ticket[6],
+                "motive_submotive": ticket[7],
+                "form": json.loads(ticket[8]) if ticket[8] else {}
+            }
+            
+            ticket_data_list.append(ticket_data)  # Adiciona o dicionário à lista
+
+        # Retornar todos os tickets como resposta JSON
+        return jsonify(ticket_data_list), 200
+    
+    except Exception as e:
+        print("Erro ao buscar detalhes do chamado:", e)
+        return jsonify({"error": "Erro interno no servidor"}), 500
+    finally:
         connection.close()
 
 
-# Endpoint para aprovar um chamado
-@app.route('/approve_ticket/<int:ticket_id>', methods=['POST'])
-def approve_ticket(ticket_id):
-    # Lógica para aprovar o ticket no banco de dados
-    connection = create_connection()
-    cursor = connection.cursor()
-    cursor.execute("UPDATE tickets SET ticket_status = 'Aprovado' WHERE id = ?", (ticket_id,))
-    connection.commit()
-    return jsonify({"message": "Chamado aprovado com sucesso."}), 200
+@app.route('/approve_ticket/<int:ticket_number>', methods=['POST'])
+def approve_ticket(ticket_number):
+    try:
+        # Obter o token no cabeçalho
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"error": "Token não fornecido"}), 401
 
-@app.route('/reject_ticket/<int:ticket_id>', methods=['POST'])
-def reject_ticket(ticket_id):
-    # Lógica para recusar o ticket no banco de dados
-    connection = create_connection()
-    cursor = connection.cursor()
-    cursor.execute("UPDATE tickets SET ticket_status = 'Recusado' WHERE id = ?", (ticket_id,))
-    connection.commit()
-    return jsonify({"message": "Chamado recusado com sucesso."}), 200
+        # Limpar o token do formato 'Bearer' e decodificar
+        token = token.replace("Bearer ", "")
+        decoded_token = decode_token(token)
+
+        if not decoded_token:
+            return jsonify({"error": "Token inválido ou expirado"}), 401
+
+        # Recuperar informações do token
+        profile = decoded_token.get("profile")
+
+        # Verificar se o perfil é GERENTE ou FIELD
+        if profile not in ["GERENTE", "FIELD"]:
+            return jsonify({"error": "Você não tem permissão para aprovar este chamado"}), 403
+
+        connection = create_connection()
+        if not connection:
+            return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
+
+        cursor = connection.cursor()
+
+        # Buscar o chamado a ser aprovado
+        cursor.execute("""
+            SELECT ticket_number, next_approver, approved_manager, approved_fieldservice, ticket_status
+            FROM tickets 
+            WHERE ticket_number = ?
+        """, (ticket_number,))
+        ticket = cursor.fetchone()
+
+        if not ticket:
+            return jsonify({"error": "Chamado não encontrado"}), 404
+
+        # Verificar se o chamado já foi aprovado por ambos os aprovadores
+        if ticket[2] == 1 and ticket[3] == 1:  # Verifica se ambos os aprovadores já aprovaram
+            
+            cursor.execute("""
+                UPDATE tickets
+                SET ticket_status = 'Aberto', next_approver = 0
+                WHERE ticket_number = ?
+            """, (ticket_number,))
+            connection.commit()
+            return jsonify({"message": "Chamado já aprovado."}), 200
+
+        # Se o próximo aprovador for nulo ou vazio, significa que o ticket já está aprovado
+        if not ticket[1]:  # ticket[1] é o campo next_approver
+            cursor.execute("""
+                UPDATE tickets
+                SET ticket_status = 'Aberto', next_approver = 0
+                WHERE ticket_number = ?
+            """, (ticket_number,))
+            connection.commit()
+            return jsonify({"message": "Chamado já aprovado, sem mais aprovadores."}), 200
+
+        # Verificar se o usuário tem permissão para aprovar (deve ser o gerente ou field)
+        current_datetime = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+        if profile == "GERENTE":
+            # Atualizar o campo de aprovação do gerente
+            cursor.execute("""
+                UPDATE tickets
+                SET approved_manager = 1, date_time_approved_rejected_manager = ?,
+                    next_approver = CASE 
+                        WHEN next_approver = 'GERENTE' THEN 'FIELD'
+                        ELSE next_approver
+                    END,
+                    ticket_status = 'Aguardando Aprovação do FieldService'
+                WHERE ticket_number = ?
+            """, (current_datetime, ticket_number,))
+            connection.commit()
+
+            return jsonify({"message": "Chamado aprovado, aguarda aprovação do field service."}), 200
+
+        elif profile == "FIELD":
+            # Atualizar o campo de aprovação do field service
+            cursor.execute("""
+                UPDATE tickets
+                SET approved_fieldservice = 1, date_time_approved_rejected_fieldservice = ?,
+                    ticket_status = 'Aberto', next_approver = 0
+                WHERE ticket_number = ?
+            """, (current_datetime, ticket_number,))
+            connection.commit()
+
+            return jsonify({"message": "Chamado aprovado."}), 200
+
+    except Exception as e:
+        print("Erro ao aprovar o chamado:", e)
+        return jsonify({"error": "Erro interno no servidor"}), 500
+    finally:
+        connection.close()
+
+
+@app.route('/reject_ticket/<int:ticket_number>', methods=['POST'])
+def reject_ticket(ticket_number):
+    try:
+        # Obter o token do cabeçalho
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"error": "Token não fornecido"}), 401
+
+        # Limpar o token do formato 'Bearer' e decodificar
+        token = token.replace("Bearer ", "")
+        decoded_token = decode_token(token)
+
+        if not decoded_token:
+            return jsonify({"error": "Token inválido ou expirado"}), 401
+
+        # Recuperar informações do token
+        profile = decoded_token.get("profile")
+
+        # Verificar se o perfil é GERENTE ou FIELD
+        if profile not in ["GERENTE", "FIELD"]:
+            return jsonify({"error": "Você não tem permissão para reprovar este chamado"}), 403
+
+        # Obter o motivo da reprovação do corpo da requisição
+        data = request.get_json()
+        rejection_reason = data.get("rejection_reason")
+
+        if not rejection_reason:
+            return jsonify({"error": "Motivo da reprovação é obrigatório"}), 400
+
+        connection = create_connection()
+        if not connection:
+            return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
+
+        cursor = connection.cursor()
+
+        # Buscar o chamado a ser reprovado
+        cursor.execute("""
+            SELECT ticket_number, next_approver, ticket_status
+            FROM tickets 
+            WHERE ticket_number = ?
+        """, (ticket_number,))
+        ticket = cursor.fetchone()
+
+        if not ticket:
+            return jsonify({"error": "Chamado não encontrado"}), 404
+
+        # Atualizar o status para "Reprovado" e armazenar o motivo da reprovação
+        current_datetime = datetime.datetime.now().strftime("%d/%m/%y %H:%M")
+
+        if profile == "GERENTE":
+            cursor.execute("""
+                UPDATE tickets
+                SET ticket_status = 'Reprovado pelo Gerente', 
+                    rejection_reason = ?,
+                    next_approver = 0,  -- Nenhum próximo aprovador
+                    date_time_approved_rejected_manager = ?
+                WHERE ticket_number = ?
+            """, (rejection_reason, current_datetime, ticket_number))
+            connection.commit()
+
+            return jsonify({"message": "Chamado reprovado pelo gerente."}), 200
+
+        elif profile == "FIELD":
+            cursor.execute("""
+                UPDATE tickets
+                SET ticket_status = 'Reprovado pelo Field Service', 
+                    rejection_reason = ?,
+                    next_approver = 0,  -- Nenhum próximo aprovador
+                    date_time_approved_rejected_fieldservice = ?
+                WHERE ticket_number = ?
+            """, (rejection_reason, current_datetime, ticket_number))
+            connection.commit()
+
+            return jsonify({"message": "Chamado reprovado pelo field service."}), 200
+
+    except Exception as e:
+        print("Erro ao reprovar o chamado:", e)
+        return jsonify({"error": "Erro interno no servidor"}), 500
+    finally:
+        connection.close()
 
 
 if __name__ == "__main__":
