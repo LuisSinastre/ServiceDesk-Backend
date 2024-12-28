@@ -41,10 +41,15 @@ def decode_token(token):
         
         # Retornar um dicionário com os dados do token
         return {
+            # GeneralData
             "user": int(decoded.get("user")),
             "position": decoded.get("position"),
+            "name": decoded.get("name"),
+            "manager": decoded.get("manager"),
+            # Profile Config
             "profile": decoded.get("profile"),
-            "name": decoded.get("name")
+            "approver_id": decoded.get("approver_id"),
+            "treatment_id": decoded.get("treatment_id"),
         }
     
     except jwt.InvalidTokenError:
@@ -81,29 +86,41 @@ def authenticate_user():
 
         
         # Recupera informações do usuário
-        cursor.execute("SELECT * FROM general_data WHERE register = ?", (data['username'],))
-        user_data = cursor.fetchone()
+        user_info_query = "SELECT * FROM general_data WHERE register = ?"
+        cursor.execute(user_info_query, (data['username'],))
+        user_info_result = cursor.fetchone()
         
-        
-        # Recuperar permissões com base no cargo
-        cursor.execute("""
-            SELECT page_id
-            FROM pages_roles
-            WHERE profile = ?
-        """, (user_data['profile'],))
-        permissions = cursor.fetchall()
+        # Recuperar informações de perfil, aprovação e tratamento
+        user_security_info_query = """
+        SELECT profile, approver_id, treatment_id
+        FROM profile_config
+        WHERE position =?"""
+        cursor.execute(user_security_info_query, (user_info_result['position'],))
+        user_security_info_result = cursor.fetchone()
 
+
+        # Recuperar permissões das páginas que o usuário pode acessar
+        pages_roles_query = """ SELECT page_id FROM pages_roles WHERE profile = ?"""
+        cursor.execute(pages_roles_query, (user_security_info_result['profile'],))
+        permissions = cursor.fetchall()
         # Apenas retornar os ids das permissões
         permission_ids = [permission['page_id'] for permission in permissions]
 
+
         # Gerar token JWT
         token = jwt.encode({
+            # GeneralData
             "user": user['user'],
-            "name": user_data['name'],
-            "position": user_data['position'],
-            "manager": user_data['manager'],
-            "profile": user_data['profile'],
-            "ids": permission_ids,  # Apenas os IDs das permissões
+            "name": user_info_result['name'],
+            "position": user_info_result['position'],
+            "manager": user_info_result['manager'],
+            # ProfileConfig
+            "profile": user_security_info_result['profile'],
+            "approver_id": user_security_info_result['approver_id'],
+            "treatment_id": user_security_info_result['treatment_id'],
+            # IDs das páginas permitidas
+            "ids": permission_ids,
+            # Datas
             "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
         }, app.config['SECRET_KEY'], algorithm="HS256")
         
@@ -148,34 +165,20 @@ def get_ticket_type():
         # Criação do cursor
         cursor = connection.cursor()
         
-        # Consulta separada em variável
-        query = """
-        SELECT 
-            t.ticket_type,
-            t.submotive,
-            t.motive_submotive,
-            t.form,
-            a.allowed_profile
-        FROM 
-            ticket_types t
-        LEFT JOIN 
-            allowed_tickets a 
-            ON t.motive_submotive = a.motive_submotive
-        WHERE 
-            a.allowed_profile = ?;
+        
+        # Chamados disponíveis para esse perfil
+        ticket_types_query = """
+        SELECT ticket_type, submotive, motive_submotive, form
+        FROM ticket_types
+        WHERE profile = ?
         """
-        
         # Execução da consulta
-        cursor.execute(query, (profile,))
-        
-        # Recupera os resultados
-        tickets = cursor.fetchall()
-
-        print("Resultados da consulta ao banco:", tickets)
+        cursor.execute(ticket_types_query, (profile,))
+        ticket_types_result = cursor.fetchall()
 
         # Processar dados retornados
         returned_data = []
-        for ticket in tickets:
+        for ticket in ticket_types_result:
             try:
                 # Carregar o JSON do campo "form", se existir
                 form_data = json.loads(ticket[3]) if ticket[3] else {}
@@ -219,6 +222,8 @@ def open_ticket():
     # Recuperar informações do token
     profile = decoded_token.get("profile")
     user = decoded_token.get("user")
+    name = decoded_token.get("name")
+    manager = decoded_token.get("manager")
 
     # Obter dados do formulário da requisição
     data = request.get_json()
@@ -232,71 +237,48 @@ def open_ticket():
     if not connection:
         return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
 
-    # Verifica se é necessário aprovação
     try:
         cursor = connection.cursor()
 
-        # Consulta o tipo de aprovação do chamado
-        approval_type_query = """
-        SELECT o.approval_type
-        FROM opening_config o
-        LEFT JOIN ticket_types t ON o.motive_submotive = t.motive_submotive
-        WHERE o.motive_submotive =?
-        """
-        cursor.execute(approval_type_query, (motive_submotive,))
-        approval_type_result = cursor.fetchall()
+        # Recupera a sequência de aprovação e tratamento do chamado
+        approval_treatment_query = """
+        SELECT approval_sequence, treatment_sequence
+        FROM ticket_types
+        WHERE profile =? AND motive_submotive =?"""
 
-        if approval_type_result:
-            approval_type_result = approval_type_result[0][0]
+        cursor.execute(approval_treatment_query, (profile, motive_submotive,))
+        approval_treatment_result = cursor.fetchone()
+        approval_sequence_str = approval_treatment_result[0]
+        approval_sequence = eval(approval_treatment_result[0])
+        treatment_sequence_str = approval_treatment_result[1]
+        treatment_sequence = eval(approval_treatment_result[1])
+
+        # Próximo aprovador
+        next_approver = approval_sequence[0]
+
+        if next_approver == 0:
+            ticket_status = "Aberto"
         else:
-            return jsonify({"error": "Nenhum tipo de aprovação encontrado para o motivo e submotivo informados"}), 400
-
-        # Consulta a sequência de aprovação
-        approval_sequence_query = """
-        SELECT approval_sequence
-        FROM approval_config
-        WHERE id_approval_type =? AND approver_profile =?
-        """
-        cursor.execute(approval_sequence_query, (approval_type_result, profile,))
-        approval_sequence_result = cursor.fetchall()
-
-        # Verifica e ordena a sequência de aprovação
-        if approval_sequence_result:
-            approval_sequence_result.sort(key=lambda x: x[0])  # Ordena pela sequência de aprovação
-            first_approver = approval_sequence_result[0][0]
-            approval_sequence_list = [x[0] for x in approval_sequence_result]
-            approval_sequence_str = json.dumps(approval_sequence_list)
-
-            # Consultar o perfil do aprovador
-            approver_profile_query = """
-            SELECT approver_profile
-            FROM approver_list
+            
+            # Verifica o perfil do próximo aprovador
+            profile_approver_query = """
+            SELECT profile
+            FROM profile_config
             WHERE approver_id =?
             """
-            cursor.execute(approver_profile_query, (first_approver,))
-            approver_profile_result = cursor.fetchall()
+            cursor.execute(profile_approver_query, (next_approver,))
+            profile_approver_result = cursor.fetchone()
+            profile_approver = profile_approver_result[0]
+            ticket_status = f"Aguardando Aprovação - {profile_approver.capitalize()}"
 
-            if approver_profile_result:
-                approver_profile = approver_profile_result[0][0]
-                ticket_status = f"Aguardando Aprovação - {approver_profile.capitalize()}"
-            else:
-                ticket_status = "Aberto"
-                first_approver = 0  # Se não encontrar perfil do aprovador, tratamos como 'Aberto'
-                approval_sequence_str = "[]"
-
-        else:
-            ticket_status = "Aberto"
-            first_approver = 0  # Caso não haja aprovadores
-            approval_sequence_str = "[]"
-            print('Sem aprovadores')
 
         # Definição da data e hora de abertura do chamado
         current_datetime = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
 
         # Inserir chamado no banco de dados
         cursor.execute(
-            "INSERT INTO tickets (ticket_type, submotive, motive_submotive, form, user, ticket_status, ticket_open_date_time, next_approver, approval_sequence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ticket_type, submotive, motive_submotive, form, user, ticket_status, current_datetime, first_approver, approval_sequence_str)
+            "INSERT INTO tickets (ticket_type, submotive, motive_submotive, form, user, ticket_status, ticket_open_date_time, next_approver, approval_sequence, treatment_sequence, name, manager) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ticket_type, submotive, motive_submotive, form, user, ticket_status, current_datetime, next_approver, approval_sequence_str, treatment_sequence_str, name, manager)
         )
         connection.commit()
 
@@ -353,7 +335,7 @@ def list_tickets():
             params = [name, user]
             print(params)
 
-        elif profile == "FIELD":
+        elif profile == "FIELDSERVICE" or "ADM":
             sql_query = "SELECT ticket_number, ticket_type, submotive, form FROM tickets"
             params = []  # Campo de busca para FIELD
 
@@ -427,7 +409,7 @@ def ticket_detail(ticket_number):
                 FROM tickets 
                 WHERE ticket_number = ?
             """, (ticket_number,))
-        elif profile == "FIELD":
+        elif profile == "FIELDSERVICE" or "ADM":
             cursor.execute("""
                 SELECT ticket_number, ticket_type, submotive, form, user, ticket_status, ticket_open_date_time
                 FROM tickets 
@@ -490,73 +472,62 @@ def list_approval():
             return jsonify({"error": "Token inválido ou expirado"}), 401
 
         # Recuperar informações do token
-        profile = decoded_token.get("profile")
         name = decoded_token.get("name")
+        approver_id = decoded_token.get("approver_id")
         
         connection = create_connection()
         if not connection:
             return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
         
         cursor = connection.cursor()
-
-        # Verifica os perfis de aprovação disponíveis
-        all_approval_profile_search_query = """
-        SELECT 
-            approver_id
-        FROM
-            approver_list
-        """
-        cursor.execute(all_approval_profile_search_query)
-        all_approval_profile = cursor.fetchall()
-        all_approver_ids = [profile[0] for profile in all_approval_profile]  # Lista de todos os approver_ids
-
-        # Verifica se o perfil de aprovação do usuário está na lista de approver_ids
-        approval_id_search_query = """
-        SELECT 
-            approver_id
-        FROM
-            approver_list
-        WHERE
-            approver_profile =?
-        """
-        cursor.execute(approval_id_search_query, (profile,))
-        approval_id = cursor.fetchall()
         
-        if approval_id:
-            approver_id = approval_id[0][0]  # Se houver algum ID de aprovador retornado
-            if approver_id not in all_approver_ids:
-                return jsonify({"error": "Perfil de aprovação não encontrado na lista de aprovadores"}), 404
-        else:
-            return jsonify({"error": "Perfil de aprovação não encontrado"}), 404
+        # Recupera os chamados pendentes de aprovação
+        
+        # Definição da consulta SQL pelo profile
+        if approver_id == 1:
+            pending_tickets_query = """
+            SELECT
+                ticket_number,
+                user,
+                next_approver,
+                manager,
+                name,
+                motive_submotive,
+                form
+            FROM
+                tickets
+            WHERE
+                next_approver = ? AND
+                manager = ?
+            """
+            cursor.execute(pending_tickets_query, (approver_id, name))
+            pending_tickets_result = cursor.fetchall()
+        
+        elif approver_id == 2 or 3:
+            pending_tickets_query = """
+            SELECT
+                ticket_number,
+                user,
+                next_approver,
+                manager,
+                name,
+                motive_submotive,
+                form
+            FROM
+                tickets
+            WHERE
+                next_approver = ?
+            """
+            cursor.execute(pending_tickets_query, (approver_id,))
+            pending_tickets_result = cursor.fetchall()
 
-        # Agora, busca pelos tickets pendentes de aprovação para o perfil do usuário
-        approval_tickets = []
-
-        if profile == "GERENTE":
-            cursor.execute("""
-                SELECT t.ticket_number, t.user, t.next_approver, gd.manager, gd.name, t.motive_submotive, t.form
-                FROM tickets t
-                JOIN general_data gd ON t.user = gd.register
-                WHERE t.next_approver = ? AND gd.manager = ?
-            """, (approver_id, name))
-            approval_tickets = cursor.fetchall()
-
-        elif profile == "FIELD":
-            cursor.execute("""
-                SELECT t.ticket_number, t.user, t.next_approver, gd.manager, gd.name, t.motive_submotive, t.form
-                FROM tickets t
-                JOIN general_data gd ON t.user = gd.register
-                WHERE t.next_approver = ?
-            """, (approver_id,))
-            approval_tickets = cursor.fetchall()
-
-        if not approval_tickets:
+        if not pending_tickets_result:
             return jsonify({"message": "Nenhum ticket pendente de aprovação"}), 404
 
         ticket_data_list = []  # Lista para armazenar os dados dos tickets
 
         # Iterando sobre os resultados de approval_tickets
-        for ticket in approval_tickets:
+        for ticket in pending_tickets_result:
             ticket_data = {
                 "ticket": ticket[0],
                 "user": ticket[1],
@@ -581,8 +552,9 @@ def list_approval():
 # Endpoint para aprovar um chamado
 @app.route('/approve_ticket/<int:ticket_number>', methods=['POST'])
 def approve_ticket(ticket_number):
+    connection = None
     try:
-        # Conexão e token
+        # Conexão com o banco de dados
         connection = create_connection()
         cursor = connection.cursor()
 
@@ -597,102 +569,88 @@ def approve_ticket(ticket_number):
         if not decoded_token:
             return jsonify({"error": "Token inválido ou expirado"}), 401
 
+        # Recuperar informações do token
+        approver_id = decoded_token.get("approver_id")
         profile = decoded_token.get("profile")
-
-        # Obter meu ID de aprovador
-        my_approver_id_query = "SELECT approver_id FROM approver_list WHERE approver_profile = ?"
-        cursor.execute(my_approver_id_query, (profile,))
-        my_approver_id_result = cursor.fetchone()
-        my_approver_id = int(my_approver_id_result[0]) if my_approver_id_result else None
-
-        if not my_approver_id:
+        
+        if not approver_id or not profile:
             return jsonify({"error": "Perfil do aprovador não encontrado"}), 404
 
-        # Recuperar próximo aprovador e sequência de aprovação
-        ticket_query = """
-        SELECT next_approver, approval_sequence, ticket_status
+        print("Aprovador atual:", approver_id)
+
+        # Verificar se já foi aprovado
+        approved_ticket_query = """
+        SELECT id_tickets_approvals
+        FROM tickets_approvals
+        WHERE ticket_number = ? AND approver_id = ?
+        """
+        cursor.execute(approved_ticket_query, (ticket_number, approver_id))
+        already_approved = cursor.fetchone()
+
+        # Recuperar a sequência de aprovação
+        find_next_approver_sequence_query = """
+        SELECT approval_sequence
         FROM tickets
         WHERE ticket_number = ?
         """
-        cursor.execute(ticket_query, (ticket_number,))
-        ticket_result = cursor.fetchone()
+        cursor.execute(find_next_approver_sequence_query, (ticket_number,))
+        approver_sequence = cursor.fetchone()
+        if approver_sequence is None:
+            return jsonify({"error": "Sequência de aprovação não encontrada"}), 404
 
-        if not ticket_result:
-            return jsonify({"error": "Ticket não encontrado"}), 404
+        approver_sequence = json.loads(approver_sequence[0])  # Converte para lista
+        print("Sequência de aprovação:", approver_sequence)
 
-        next_approver, approval_sequence_str, ticket_status = ticket_result
-        next_approver = int(next_approver) if next_approver else None  # Garantir consistência no tipo
+        # Verificar se o aprovador atual está na sequência
+        if approver_id not in approver_sequence:
+            return jsonify({"error": "Aprovador atual não está na sequência de aprovação"}), 400
 
-        # Verificar sequência de aprovação
-        try:
-            approval_sequence = json.loads(approval_sequence_str)
-        except json.JSONDecodeError:
-            return jsonify({"error": "Erro ao decodificar a sequência de aprovação"}), 500
+        # Determinar próximo aprovador
+        current_index = approver_sequence.index(approver_id)
+        next_approver = approver_sequence[current_index + 1] if current_index + 1 < len(approver_sequence) else 0
 
-        # Verificar aprovações realizadas
-        if next_approver == my_approver_id:
-            realized_approval_query = """
-            SELECT approver_id
-            FROM tickets_approvals
-            WHERE ticket_number = ? AND approver_id = ?
+        # Recupera o perfil do próximo aprovador
+        next_approver_profile = 0
+        if next_approver != 0:
+            next_approver_profile_query = """
+            SELECT profile
+            FROM profile_config
+            WHERE approver_id = ?
             """
-            cursor.execute(realized_approval_query, (ticket_number, my_approver_id))
-            realized_approval_result = cursor.fetchone()
+            cursor.execute(next_approver_profile_query, (next_approver,))
+            next_approver_profile = cursor.fetchone()
+            if not next_approver_profile:
+                return jsonify({"error": "Perfil do próximo aprovador não encontrado"}), 404
+            next_approver_profile = next_approver_profile[0]
 
-            if realized_approval_result:
-                return jsonify({"message": "Aprovação já realizada"}), 200
+        # Definir status do chamado
+        ticket_status = "Aprovado" if next_approver == 0 else f"Aguardando Aprovação - {next_approver_profile.capitalize()}"
 
-            # Inserir aprovação no histórico
-            current_datetime = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")  # Obtendo o horário atual
-            insert_approval_query = """
-            INSERT INTO tickets_approvals (ticket_number, approver_id, date_time_approval_rejection, approver_profile)
+        # Inserir ou atualizar informações de aprovação
+        current_date_time = datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        if not already_approved:
+            insert_approval_info = """
+            INSERT INTO tickets_approvals (ticket_number, approver_id, approver_profile, date_time_approval)
             VALUES (?, ?, ?, ?)
             """
-            cursor.execute(insert_approval_query, (ticket_number, my_approver_id, current_datetime, profile))
+            cursor.execute(insert_approval_info, (ticket_number, approver_id, profile, current_date_time))
 
-            # Atualizar o próximo aprovador ou status do ticket
-            if len(approval_sequence) > 1:
-                approval_sequence.pop(0)  # Remove o aprovador atual da sequência
-                new_next_approver = approval_sequence[0]
+        update_ticket_info = """
+        UPDATE tickets
+        SET next_approver = ?, 
+            ticket_status = ?
+        WHERE ticket_number = ?
+        """
+        cursor.execute(update_ticket_info, (next_approver, ticket_status, ticket_number))
 
-                # Obter o perfil do próximo aprovador
-                next_approver_profile_query = """
-                SELECT approver_profile FROM approver_list WHERE approver_id = ?
-                """
-                cursor.execute(next_approver_profile_query, (new_next_approver,))
-                next_approver_profile_result = cursor.fetchone()
-
-                if next_approver_profile_result:
-                    next_approver_profile = next_approver_profile_result[0]
-                else:
-                    next_approver_profile = "Desconhecido"  # Caso não encontre o próximo aprovador
-
-                update_ticket_query = """
-                UPDATE tickets
-                SET next_approver = ?, approval_sequence = ?, ticket_status = ?
-                WHERE ticket_number = ?
-                """
-                cursor.execute(update_ticket_query, (
-                    new_next_approver,
-                    json.dumps(approval_sequence),
-                    f"Aguardando Aprovação - {next_approver_profile.capitalize()}",
-                    ticket_number
-                ))
-            else:
-                update_ticket_status_query = """
-                UPDATE tickets
-                SET next_approver = 0, approval_sequence = '[0]', ticket_status = 'Aprovado'
-                WHERE ticket_number = ?
-                """
-                cursor.execute(update_ticket_status_query, (ticket_number,))
-
-            connection.commit()
-            return jsonify({"message": "Aprovação realizada com sucesso"}), 200
-        else:
-            return jsonify({"message": "Você não é o próximo aprovador"}), 403
-
+        # Confirmar transação
+        connection.commit()
+        return {"success": True, "message": "Aprovação processada com sucesso!"}
+            
     except Exception as e:
+        print(f"Erro ao processar aprovação: {e}")
         return jsonify({"error": "Erro interno no servidor"}), 500
+    
     finally:
         connection.close()
 
@@ -742,26 +700,18 @@ def reject_ticket(ticket_number):
         if not decoded_token:
             return jsonify({"error": "Token inválido ou expirado"}), 401
 
+        approver_id = decoded_token.get("approver_id")
         profile = decoded_token.get("profile")
-        if not profile:
+        if not approver_id or not profile:
             return jsonify({"error": "Perfil não encontrado no token"}), 400
 
-        # Obter meu ID de aprovador
-        my_approver_id_query = "SELECT approver_id FROM approver_list WHERE approver_profile = ?"
-        cursor.execute(my_approver_id_query, (profile,))
-        my_approver_id_result = cursor.fetchone()
-        my_approver_id = int(my_approver_id_result[0]) if my_approver_id_result else None
-
-        if not my_approver_id:
-            return jsonify({"error": "Perfil do aprovador não encontrado"}), 404
-        
         # Buscar dados do chamado
-        
-        cursor.execute("""
-            SELECT ticket_number, next_approver, approval_sequence, ticket_status
-            FROM tickets
-            WHERE ticket_number = ?
-        """, (ticket_number,))
+        ticket_info_query = """
+        SELECT ticket_number, next_approver, approval_sequence, ticket_status
+        FROM tickets
+        WHERE ticket_number = ?
+        """
+        cursor.execute(ticket_info_query, (ticket_number,))
         ticket = cursor.fetchone()
 
         if not ticket:
@@ -769,40 +719,137 @@ def reject_ticket(ticket_number):
 
         ticket_number, next_approver, approval_sequence_str, ticket_status = ticket
 
-        # Verificar se o usuário já rejeitou
-        cursor.execute("""
-            SELECT approver_id FROM tickets_approvals WHERE ticket_number = ? AND approver_id = ?
-        """, (ticket_number, my_approver_id))
-        rejection = cursor.fetchone()
-
-        if rejection:
-            return jsonify({"message": "Você já rejeitou este chamado"}), 200
-
         # Obter motivo da reprovação
         data = request.get_json()
         rejection_reason = data.get("rejection_reason")
         if not rejection_reason:
             return jsonify({"error": "Motivo da reprovação é obrigatório"}), 400
 
-        # Registrar a rejeição na tabela tickets_approvals
-        current_datetime = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
-        cursor.execute("""
-            INSERT INTO tickets_approvals (ticket_number, approver_id, date_time_approval_rejection, approver_profile)
-            VALUES (?, ?, ?, ?)
-        """, (ticket_number, my_approver_id, current_datetime, profile))
+        # Verificar se o usuário já rejeitou
+        already_rejected_query = """
+        SELECT date_time_rejection FROM tickets_approvals WHERE ticket_number = ? AND rejected_id = ?
+        """
+        cursor.execute(already_rejected_query, (ticket_number, approver_id))
+        rejection = cursor.fetchone()
 
-        # Atualizar o status do ticket para "Reprovado"
-        cursor.execute("""
-            UPDATE tickets
-            SET ticket_status = 'Reprovado', rejection_reason = ?, next_approver = 0, approval_sequence = '[0]'
-            WHERE ticket_number = ?
-        """, (rejection_reason, ticket_number))
+        # Se o chamado já estiver reprovado, atualizar tickets com as infos
+        if rejection:
+            date_time_rejection = rejection[0]
+            # Atualizar o status do ticket para "Reprovado"
+            update_ticket_query = """
+                UPDATE tickets
+                SET ticket_status = 'Reprovado', rejection_reason = ?, next_approver = 0, date_time_rejection = ?
+                WHERE ticket_number = ?
+            """
+            cursor.execute(update_ticket_query, (rejection_reason, date_time_rejection, ticket_number,))
+            return jsonify({"message": "Você já rejeitou este chamado. Atualizando a tabela tickets"}), 200
+        else:
+            # Registrar a rejeição na tabela tickets_approvals
+            current_date_time = datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+            
+            reject_approvals_query = """
+                INSERT INTO tickets_approvals (ticket_number, rejected_id, repprover_profile, date_time_rejection)
+                VALUES (?, ?, ?, ?)
+            """
+            cursor.execute(reject_approvals_query, (ticket_number, approver_id, profile, current_date_time,))
+
+            # Atualizar o status do ticket para "Reprovado"
+            
+            
+            reject_tickets_query = """
+                UPDATE tickets
+                SET ticket_status = 'Reprovado', rejection_reason = ?, next_approver = 0
+                WHERE ticket_number = ?
+            """
+            cursor.execute(reject_tickets_query, (rejection_reason, ticket_number))
 
         connection.commit()
         return jsonify({"message": "Chamado rejeitado com sucesso"}), 200
 
     except Exception as e:
         print(f"Erro ao reprovar o chamado: {e}")
+        return jsonify({"error": "Erro interno no servidor"}), 500
+    finally:
+        connection.close()
+
+
+
+# Endpoint para listar os chamados na fila de tratamento
+@app.route('/processing_tickets', methods=['GET'])
+def list_processing_tickets():
+    try:
+        # Obter o token no cabeçalho
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"error": "Token não fornecido"}), 401
+
+        # Limpar o token do formato 'Bearer' e decodificar
+        token = token.replace("Bearer ", "")
+        decoded_token = decode_token(token)
+
+        if not decoded_token:
+            return jsonify({"error": "Token inválido ou expirado"}), 401
+
+        # Recuperar informações do token
+        profile = decoded_token.get("profile")
+        
+        connection = create_connection()
+        if not connection:
+            return jsonify({"error": "Não foi possível se conectar com o banco"}), 500
+        
+        cursor = connection.cursor()
+
+        # Verificar meu perfil de responsável do chamado
+        treatment_profile_query = """
+        SELECT treatment_id
+        FROM treatment_list
+        WHERE treatment_profile = ?        
+        """
+        cursor.execute(treatment_profile_query, (profile,))
+        treatment_profile_result = cursor.fetchone()
+        treatment_profile_id = treatment_profile_result [0][0]
+
+        # Trazer somente os chamados que foram aprovados
+
+        ticket_for_treatment_query = """consulta está no sqlstudio"""
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        # Iterando sobre os resultados de approval_tickets
+        for ticket in approval_tickets:
+            ticket_data = {
+                "ticket": ticket[0],
+                "user": ticket[1],
+                "next_approver": ticket[2],
+                "manager": ticket[3],
+                "name": ticket[4],
+                "motive_submotive": ticket[5],
+                "form": json.loads(ticket[6]) if ticket[6] else {}
+            }
+            ticket_data_list.append(ticket_data)  # Adiciona o dicionário à lista
+
+        # Retornar todos os tickets como resposta JSON
+        return jsonify(ticket_data_list), 200
+    
+    except Exception as e:
+        print("Erro ao buscar detalhes do chamado:", e)
         return jsonify({"error": "Erro interno no servidor"}), 500
     finally:
         connection.close()
