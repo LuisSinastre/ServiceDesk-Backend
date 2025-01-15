@@ -39,14 +39,15 @@ def list_tickets():
             sql_query = """
                 SELECT ticket_number, ticket_type, submotive, form
                 FROM tickets
-                WHERE user IN (
-                    SELECT register FROM general_data WHERE manager = ?
-                ) OR user = ?
+                WHERE (
+                    user IN (
+                        SELECT register FROM general_data WHERE manager = ?
+                    ) OR user = ?
+                )
             """
             params = [name, user]
-            print(params)
 
-        elif profile == "FIELDSERVICE" or "ADM":
+        elif profile in ("FIELDSERVICE", "ADM"):
             sql_query = "SELECT ticket_number, ticket_type, submotive, form FROM tickets"
             params = []  # Campo de busca para FIELD
 
@@ -56,10 +57,9 @@ def list_tickets():
 
         # Adicionar a pesquisa se fornecida
         if search_query:
-            if 'WHERE' in sql_query:  # Se já houver uma cláusula WHERE
-                sql_query += " AND (ticket_number = ? OR ticket_type LIKE ? OR submotive LIKE ?)"
-            else:  # Caso contrário, inicia com WHERE
-                sql_query += " WHERE (ticket_number = ? OR ticket_type LIKE ? OR submotive LIKE ?)"
+            search_clause = " AND " if "WHERE" in sql_query else " WHERE "
+            search_filter = "(ticket_number = ? OR ticket_type LIKE ? OR submotive LIKE ?)"
+            sql_query += search_clause + search_filter
             params.extend([search_query, f"%{search_query}%", f"%{search_query}%"])
 
         cursor = connection.cursor()
