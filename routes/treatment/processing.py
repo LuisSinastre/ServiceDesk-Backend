@@ -26,6 +26,7 @@ def list_processing_tickets():
 
         # Recuperar informações do token
         profile = decoded_token.get("profile")
+        treatment_id = decoded_token.get("treatment_id")
         
         connection = create_connection()
         if not connection:
@@ -33,30 +34,8 @@ def list_processing_tickets():
         
         cursor = connection.cursor()
 
-        # Verificar meu perfil de responsável do chamado
-        treatment_profile_query = """
-        SELECT treatment_id
-        FROM treatment_list
-        WHERE treatment_profile = ?        
-        """
-        cursor.execute(treatment_profile_query, (profile,))
-        treatment_profile_result = cursor.fetchone()
-        treatment_profile_id = treatment_profile_result [0][0]
-
-        # Trazer somente os chamados que foram aprovados
-
-        ticket_for_treatment_query = """consulta está no sqlstudio"""
-
-
-
-
-
-
-
-
-
-
-
+        # Trazer somente os chamados estão abertos ou aprovados com o meu ID de tratamento
+        # Já ajustar um form para o tratamento em ticket_types
 
 
 

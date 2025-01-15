@@ -48,25 +48,30 @@ def approve_ticket(ticket_number):
 
         # Recuperar a sequência de aprovação
         find_next_approver_sequence_query = """
-        SELECT approval_sequence
+        SELECT approval_sequence, treatment_sequence
         FROM tickets
         WHERE ticket_number = ?
         """
         cursor.execute(find_next_approver_sequence_query, (ticket_number,))
-        approver_sequence = cursor.fetchone()
-        if approver_sequence is None:
+        approver_treatment_sequence = cursor.fetchone()
+        if approver_treatment_sequence is None:
             return jsonify({"error": "Sequência de aprovação não encontrada"}), 404
 
-        approver_sequence = json.loads(approver_sequence[0])  # Converte para lista
+        approver_sequence = json.loads(approver_treatment_sequence[0])
+        treatment_sequence = json.loads(approver_treatment_sequence[1])
         print("Sequência de aprovação:", approver_sequence)
+        print("Sequência de tratamento:", treatment_sequence)
+
 
         # Verificar se o aprovador atual está na sequência
         if approver_id not in approver_sequence:
             return jsonify({"error": "Aprovador atual não está na sequência de aprovação"}), 400
 
+
         # Determinar próximo aprovador
         current_index = approver_sequence.index(approver_id)
         next_approver = approver_sequence[current_index + 1] if current_index + 1 < len(approver_sequence) else 0
+
 
         # Recupera o perfil do próximo aprovador
         next_approver_profile = 0
@@ -84,6 +89,7 @@ def approve_ticket(ticket_number):
 
         # Definir status do chamado
         ticket_status = "Aprovado" if next_approver == 0 else f"Aguardando Aprovação - {next_approver_profile.capitalize()}"
+        next_treatment = treatment_sequence[0] if next_approver == 0 else 0
 
         # Inserir ou atualizar informações de aprovação
         current_date_time = datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')
@@ -97,10 +103,11 @@ def approve_ticket(ticket_number):
         update_ticket_info = """
         UPDATE tickets
         SET next_approver = ?, 
-            ticket_status = ?
+            ticket_status = ?,
+            next_treatment =?
         WHERE ticket_number = ?
         """
-        cursor.execute(update_ticket_info, (next_approver, ticket_status, ticket_number))
+        cursor.execute(update_ticket_info, (next_approver, ticket_status, next_treatment, ticket_number))
 
         # Confirmar transação
         connection.commit()

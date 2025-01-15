@@ -63,6 +63,7 @@ def open_ticket():
 
         if next_approver == 0:
             ticket_status = "Aberto"
+            next_treatment = treatment_sequence[0]
         else:
             
             # Verifica o perfil do próximo aprovador
@@ -75,6 +76,7 @@ def open_ticket():
             profile_approver_result = cursor.fetchone()
             profile_approver = profile_approver_result[0]
             ticket_status = f"Aguardando Aprovação - {profile_approver.capitalize()}"
+            next_treatment = 0
 
 
         # Definição da data e hora de abertura do chamado
@@ -82,8 +84,8 @@ def open_ticket():
 
         # Inserir chamado no banco de dados
         cursor.execute(
-            "INSERT INTO tickets (ticket_type, submotive, motive_submotive, form, user, ticket_status, ticket_open_date_time, next_approver, approval_sequence, treatment_sequence, name, manager) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ticket_type, submotive, motive_submotive, form, user, ticket_status, current_datetime, next_approver, approval_sequence_str, treatment_sequence_str, name, manager)
+            "INSERT INTO tickets (ticket_type, submotive, motive_submotive, form, user, ticket_status, ticket_open_date_time, next_approver, approval_sequence, treatment_sequence, name, manager, next_treatment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ticket_type, submotive, motive_submotive, form, user, ticket_status, current_datetime, next_approver, approval_sequence_str, treatment_sequence_str, name, manager, next_treatment)
         )
         connection.commit()
 

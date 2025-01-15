@@ -90,7 +90,7 @@ def reject_ticket(ticket_number):
             # Atualizar o status do ticket para "Reprovado"
             update_ticket_query = """
                 UPDATE tickets
-                SET ticket_status = 'Reprovado', rejection_reason = ?, next_approver = 0, date_time_rejection = ?
+                SET ticket_status = 'Reprovado', rejection_reason = ?, next_approver = 0, next_treatment = 0, date_time_rejection = ?
                 WHERE ticket_number = ?
             """
             cursor.execute(update_ticket_query, (rejection_reason, date_time_rejection, ticket_number,))
@@ -110,7 +110,7 @@ def reject_ticket(ticket_number):
             
             reject_tickets_query = """
                 UPDATE tickets
-                SET ticket_status = 'Reprovado', rejection_reason = ?, next_approver = 0
+                SET ticket_status = 'Reprovado', rejection_reason = ?, next_approver = 0, next_treatment = 0
                 WHERE ticket_number = ?
             """
             cursor.execute(reject_tickets_query, (rejection_reason, ticket_number))
