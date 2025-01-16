@@ -46,8 +46,7 @@ def list_processing_tickets():
                 name,
                 manager,
                 ticket_open_date_time,
-                ticket_status,
-                treatment_form
+                ticket_status
             FROM
                 tickets
             WHERE
@@ -69,8 +68,6 @@ def list_processing_tickets():
                 "manager": ticket[5],
                 "ticket_open_date_time": ticket[6],
                 "ticket_status": ticket[7],
-                "treatment_form": json.loads(ticket[8]) if ticket[8] else {},
-
             }
             ticket_data_list.append(ticket_data)  # Adiciona o dicionário à lista
 

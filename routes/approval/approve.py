@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request, current_app
+from flask import Blueprint, jsonify, request
 from utils.token import decode_token
 from db import create_connection
 import json
@@ -92,7 +92,7 @@ def approve_ticket(ticket_number):
         next_treatment = treatment_sequence[0] if next_approver == 0 else 0
 
         # Inserir ou atualizar informações de aprovação
-        current_date_time = datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+        current_date_time = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
         if not already_approved:
             insert_approval_info = """
             INSERT INTO tickets_approvals (ticket_number, approver_id, approver_profile, date_time_approval)
