@@ -56,7 +56,7 @@ def list_approval():
             cursor.execute(pending_tickets_query, (approver_id, name))
             pending_tickets_result = cursor.fetchall()
         
-        elif approver_id == 2 or 3:
+        elif approver_id == 2 or approver_id == 3:
             pending_tickets_query = """
             SELECT
                 ticket_number,

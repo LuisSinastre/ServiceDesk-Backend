@@ -25,8 +25,8 @@ def list_processing_tickets():
             return jsonify({"error": "Token inválido ou expirado"}), 401
 
         # Recuperar informações do token
-        profile = decoded_token.get("profile")
         treatment_id = decoded_token.get("treatment_id")
+        print(treatment_id)
         
         connection = create_connection()
         if not connection:
@@ -37,24 +37,40 @@ def list_processing_tickets():
         # Trazer somente os chamados estão abertos ou aprovados com o meu ID de tratamento
         # Já ajustar um form para o tratamento em ticket_types
 
+        processing_query = """
+            SELECT
+                ticket_number,
+                motive_submotive,
+                form, 
+                user,
+                name,
+                manager,
+                ticket_open_date_time,
+                ticket_status,
+                treatment_form
+            FROM
+                tickets
+            WHERE
+                next_treatment = ?
+            """
+        cursor.execute(processing_query, (treatment_id,))
+        processing_result = cursor.fetchall()
 
-
-
-
-
-
-
+        ticket_data_list = []
 
         # Iterando sobre os resultados de approval_tickets
-        for ticket in approval_tickets:
+        for ticket in processing_result:
             ticket_data = {
                 "ticket": ticket[0],
-                "user": ticket[1],
-                "next_approver": ticket[2],
-                "manager": ticket[3],
+                "motive_submotive": ticket[1],
+                "form": json.loads(ticket[2]) if ticket[2] else {},
+                "user": ticket[3],
                 "name": ticket[4],
-                "motive_submotive": ticket[5],
-                "form": json.loads(ticket[6]) if ticket[6] else {}
+                "manager": ticket[5],
+                "ticket_open_date_time": ticket[6],
+                "ticket_status": ticket[7],
+                "treatment_form": json.loads(ticket[8]) if ticket[8] else {},
+
             }
             ticket_data_list.append(ticket_data)  # Adiciona o dicionário à lista
 

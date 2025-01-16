@@ -47,7 +47,7 @@ def open_ticket():
 
         # Recupera a sequência de aprovação e tratamento do chamado
         approval_treatment_query = """
-        SELECT approval_sequence, treatment_sequence
+        SELECT approval_sequence, treatment_sequence, treatment_form
         FROM ticket_types
         WHERE profile =? AND motive_submotive =?"""
 
@@ -57,6 +57,7 @@ def open_ticket():
         approval_sequence = eval(approval_treatment_result[0])
         treatment_sequence_str = approval_treatment_result[1]
         treatment_sequence = eval(approval_treatment_result[1])
+        treatment_form = approval_treatment_result[2]
 
         # Próximo aprovador
         next_approver = approval_sequence[0]
@@ -84,8 +85,8 @@ def open_ticket():
 
         # Inserir chamado no banco de dados
         cursor.execute(
-            "INSERT INTO tickets (ticket_type, submotive, motive_submotive, form, user, ticket_status, ticket_open_date_time, next_approver, approval_sequence, treatment_sequence, name, manager, next_treatment) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (ticket_type, submotive, motive_submotive, form, user, ticket_status, current_datetime, next_approver, approval_sequence_str, treatment_sequence_str, name, manager, next_treatment)
+            "INSERT INTO tickets (ticket_type, submotive, motive_submotive, form, user, ticket_status, ticket_open_date_time, next_approver, approval_sequence, treatment_sequence, name, manager, next_treatment, treatment_form) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ticket_type, submotive, motive_submotive, form, user, ticket_status, current_datetime, next_approver, approval_sequence_str, treatment_sequence_str, name, manager, next_treatment, treatment_form)
         )
         connection.commit()
 
