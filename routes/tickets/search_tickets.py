@@ -37,7 +37,7 @@ def list_tickets():
         # Consultas SQL baseadas no perfil
         if profile == "GERENTE":
             sql_query = """
-                SELECT ticket_number, ticket_type, submotive, form
+                SELECT ticket_number, ticket_type, submotive, form, user, name
                 FROM tickets
                 WHERE (
                     user IN (
@@ -48,11 +48,11 @@ def list_tickets():
             params = [name, user]
 
         elif profile in ("FIELDSERVICE", "ADM"):
-            sql_query = "SELECT ticket_number, ticket_type, submotive, form FROM tickets"
+            sql_query = "SELECT ticket_number, ticket_type, submotive, form, user, name FROM tickets"
             params = []  # Campo de busca para FIELD
 
         else:  # Para usuário normal
-            sql_query = "SELECT ticket_number, ticket_type, submotive, form FROM tickets WHERE user = ?"
+            sql_query = "SELECT ticket_number, ticket_type, submotive, form, user, name FROM tickets WHERE user = ?"
             params = [user]
 
         # Adicionar a pesquisa se fornecida
@@ -76,7 +76,10 @@ def list_tickets():
             "ticket_number": ticket[0],
             "ticket_type": ticket[1],
             "submotive": ticket[2],
-            "form": json.loads(ticket[3]) if ticket[3] else {}
+            "form": json.loads(ticket[3]) if ticket[3] else {},
+            "user": ticket[4],
+            "name": ticket[5],
+
         } for ticket in tickets]), 200
 
     except Exception as e:

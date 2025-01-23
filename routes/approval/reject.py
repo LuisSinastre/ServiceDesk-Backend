@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request, current_app
+from flask import Blueprint, jsonify, request
 from utils.token import decode_token
 from db import create_connection
 import datetime
@@ -90,14 +90,14 @@ def reject_ticket(ticket_number):
             # Atualizar o status do ticket para "Reprovado"
             update_ticket_query = """
                 UPDATE tickets
-                SET ticket_status = 'Reprovado', rejection_reason = ?, next_approver = 0, next_treatment = 0, date_time_rejection = ?
+                SET ticket_status = 'Reprovado', rejection_reason = ?, next_approver = 0, next_treatment = 0, close_date_time = ?
                 WHERE ticket_number = ?
             """
             cursor.execute(update_ticket_query, (rejection_reason, date_time_rejection, ticket_number,))
             return jsonify({"message": "Você já rejeitou este chamado. Atualizando a tabela tickets"}), 200
         else:
             # Registrar a rejeição na tabela tickets_approvals
-            current_date_time = datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+            current_date_time = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
             
             reject_approvals_query = """
                 INSERT INTO tickets_approvals (ticket_number, rejected_id, repprover_profile, date_time_rejection)
@@ -108,12 +108,14 @@ def reject_ticket(ticket_number):
             # Atualizar o status do ticket para "Reprovado"
             
             
+
+            
             reject_tickets_query = """
                 UPDATE tickets
-                SET ticket_status = 'Reprovado', rejection_reason = ?, next_approver = 0, next_treatment = 0
+                SET ticket_status = 'Reprovado', rejection_reason = ?, next_approver = 0, next_treatment = 0, close_date_time = ?
                 WHERE ticket_number = ?
             """
-            cursor.execute(reject_tickets_query, (rejection_reason, ticket_number))
+            cursor.execute(reject_tickets_query, (rejection_reason, current_date_time, ticket_number))
 
         connection.commit()
         return jsonify({"message": "Chamado rejeitado com sucesso"}), 200

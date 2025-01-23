@@ -9,6 +9,8 @@ from routes.tickets.open_ticket import open_tickets
 from routes.tickets.search_tickets import search_tickets
 from routes.tickets.ticket_types import ticket_types
 from routes.treatment.processing import processing
+from routes.treatment.treat import treat
+from routes.treatment.cancel import cancel
 
 # Criação do aplicativo Flask
 app = Flask(__name__)
@@ -35,6 +37,10 @@ app.register_blueprint(ticket_types)
 
 # Tratamento
 app.register_blueprint(processing)
+app.register_blueprint(treat)
+app.register_blueprint(cancel)
+
+
 
 if __name__ == "__main__":
     app.run(debug=True)
