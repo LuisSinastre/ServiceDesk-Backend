@@ -46,7 +46,8 @@ def list_approval():
                 manager,
                 name,
                 motive_submotive,
-                form
+                form,
+                ticket_status
             FROM
                 tickets
             WHERE
@@ -65,7 +66,8 @@ def list_approval():
                 manager,
                 name,
                 motive_submotive,
-                form
+                form,
+                ticket_status
             FROM
                 tickets
             WHERE
@@ -88,7 +90,8 @@ def list_approval():
                 "manager": ticket[3],
                 "name": ticket[4],
                 "motive_submotive": ticket[5],
-                "form": json.loads(ticket[6]) if ticket[6] else {}
+                "form": json.loads(ticket[6]) if ticket[6] else {},
+                "ticket_status": ticket[7]
             }
             ticket_data_list.append(ticket_data)  # Adiciona o dicionário à lista
 

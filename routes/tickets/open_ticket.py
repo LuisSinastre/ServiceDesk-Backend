@@ -80,7 +80,7 @@ def open_ticket():
 
 
         # Definição da data e hora de abertura do chamado
-        current_datetime = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+        current_datetime = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
         # Inserir chamado no banco de dados
         cursor.execute(

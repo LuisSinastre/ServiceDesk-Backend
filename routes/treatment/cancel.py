@@ -96,7 +96,7 @@ def cancel_ticket(ticket_number):
 
 
         # Definir status do chamado como concluído
-        current_date_time = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+        current_date_time = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         ticket_status = "Cancelado"
         close_date_time = current_date_time
 

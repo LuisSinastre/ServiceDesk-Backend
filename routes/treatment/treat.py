@@ -76,7 +76,7 @@ def treat_ticket(ticket_number):
 
 
         # Definir status do chamado como concluído
-        current_date_time = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+        current_date_time = datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         ticket_status = "Concluído" if next_treatment == 0 else initial_ticket_status
         close_date_time = current_date_time if next_treatment == 0 else ""
 
